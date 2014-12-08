@@ -9,6 +9,7 @@ import GHCJS.DOM.Document (documentCreateElement, documentGetElementById, docume
 import GHCJS.DOM.HTMLElement (htmlElementSetInnerText, htmlElementSetInnerHTML)
 import GHCJS.DOM.Node (nodeInsertBefore, nodeAppendChild)
 import GHCJS.DOM.Types (castToHTMLDivElement)
+import JavaScript.JQeury
 import Text.Blaze.Html.Renderer.Text (renderHtml)
 import Text.Hamlet (shamlet)
 

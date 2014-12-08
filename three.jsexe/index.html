@@ -1,14 +1,55 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
   <head>
+    <meta charset="utf-8">
+    <title>GHCJS • Todo</title>
+    <link rel="stylesheet" href="style.css">
     <script language="javascript" src="lib.js"></script>
     <script language="javascript" src="rts.js"></script>
     <script language="javascript" src="lib1.js"></script>
     <script language="javascript" src="out.js"></script>
   </head>
   <body>
-  </body>
+    <section id="todoapp">
+      <header id="header">
+        <h1>todos</h1>
+        <input type="text" id="new-todo" placeholder="What needs to be done?" />
+      </header>
+
+      <section id="main">
+        <div id="todo-list-div">
+        </div>
+
+        <input type="checkbox" id="toggle-all">
+      </section>
+
+      <footer id="footer">
+        <span id="todo-count">
+          <strong>2</strong> todos left
+        </span>
+        <ul id="filters">
+          <li>
+            <a href="all" class="selected">All</a>
+          </li>
+          <li>
+            <a href="active">Active</a>
+          </li>
+          <li>
+            <a href="completed">Completed</a>
+          </li>
+        </ul>
+
+        <button id="clear-completed">
+          Clear completed (1)
+        </button>
+      </footer>
+    </section>
+
+    <footer id="info">
+      <p>Double-click to edit a todo</p>
+    </footer>
   <script language="javascript">
     h$main(h$mainZCMainzimain);
   </script>
+  </body>
 </html>
