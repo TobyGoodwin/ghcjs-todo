@@ -23,16 +23,23 @@ main = do
   myThing <- fetchTodoList
   select "#todo-list-div" >>= appendJQuery myThing
 
+thing = do
+  myThing <- select "<div>this is my new thing!</div>"
+  select "body" >>= appendJQuery myThing
+  select "#todo-list-3" >>= detach
+
 fetchTodoList = do
   select $ T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
     <ul #todo-list>
-      $forall (t, c) <- ts
-        <li :c:.completed>
+      $forall (i, t, c) <- ts
+        <li :c:.completed #todo-list-#{i}>
           <input .toggle type=checkbox>
           <label>
             #{t}
-          <button class="destroy">
+          <button class="destroy" onclick="h$run(h$mainZCMainzithing)">
   |]
   where
-    ts :: [(Text, Bool)]
-    ts = [("Steal underpants", True), ("???", False), ("Profit!", False)]
+    ts :: [(Int, Text, Bool)]
+    ts = [ (19, "Steal underpants", True)
+         , (3, "???", False)
+         , (16, "Profit!", False)]
