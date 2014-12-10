@@ -26,8 +26,10 @@ main = do
 thing = do
   myThing <- select "<div>this is my new thing!</div>"
   select "body" >>= appendJQuery myThing
+  -- select (T.append "#todo-list-" (T.pack (show i))) >>= detach
   select "#todo-list-3" >>= detach
 
+--           <button class="destroy" onclick="h$run(h$mainZCMainzithing)">
 fetchTodoList = do
   select $ T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
     <ul #todo-list>
@@ -36,7 +38,7 @@ fetchTodoList = do
           <input .toggle type=checkbox>
           <label>
             #{t}
-          <button class="destroy" onclick="h$run(h$mainZCMainzithing)">
+          <button class=destroy onclick=delete_helper(#{i})>
   |]
   where
     ts :: [(Int, Text, Bool)]
