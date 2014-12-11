@@ -4,6 +4,7 @@
 module Main where
 
 import Control.Monad
+import Control.Monad.State (StateT, get, lift, runStateT)
 import Data.Default
 import Data.IORef
 import Data.Text (Text)
@@ -20,8 +21,14 @@ main = do
   let getCount = atomicModifyIORef counter (\c -> let c' = c+1 in (c', T.pack $ show c'))
   click (\_ -> void $ getCount >>= flip setText myCount) def myClick
   select "body" >>= appendJQuery myClick >>= appendJQuery myCount
+  runStateT stMain initialTodos
+  return ()
+
+stMain :: StateT Todos IO ()
+stMain = do
   myThing <- fetchTodoList
-  select "#todo-list-div" >>= appendJQuery myThing
+  lift $ select "#todo-list-div" >>= appendJQuery myThing
+  return ()
 
 thing :: Int -> IO ()
 thing i = do
@@ -33,7 +40,8 @@ thing i = do
 
 --           <button class="destroy" onclick="h$run(h$mainZCMainzithing)">
 fetchTodoList = do
-  select $ T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
+  ts <- get
+  lift $ select $ T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
     <ul #todo-list>
       $forall (i, t, c) <- ts
         <li :c:.completed #todo-list-#{i}>
@@ -42,8 +50,13 @@ fetchTodoList = do
             #{t}
           <button class=destroy onclick=delete_helper(#{i})>
   |]
-  where
-    ts :: [(Int, Text, Bool)]
-    ts = [ (19, "Steal underpants", True)
-         , (3, "???", False)
-         , (16, "Profit!", False)]
+
+type Todo = (Int, Text, Bool)
+type Todos = [Todo]
+
+initialTodos :: Todos
+initialTodos = 
+  [ (19, "Steal underpants", True)
+  , (3, "???", False)
+  , (16, "Profit!", False)
+  ]
