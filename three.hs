@@ -23,11 +23,13 @@ main = do
   myThing <- fetchTodoList
   select "#todo-list-div" >>= appendJQuery myThing
 
-thing = do
+thing :: Int -> IO ()
+thing i = do
   myThing <- select "<div>this is my new thing!</div>"
   select "body" >>= appendJQuery myThing
-  -- select (T.append "#todo-list-" (T.pack (show i))) >>= detach
-  select "#todo-list-3" >>= detach
+  select (T.append "#todo-list-" (T.pack (show i))) >>= detach
+  -- select "#todo-list-3" >>= detach
+  return ()
 
 --           <button class="destroy" onclick="h$run(h$mainZCMainzithing)">
 fetchTodoList = do
