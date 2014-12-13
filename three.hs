@@ -5,6 +5,7 @@ module Main where
 
 import Control.Monad
 import Control.Monad.State (StateT, get, lift, runStateT, put)
+import Control.Monad.Trans.Control (control)
 import Data.Default
 import Data.IORef
 import qualified Data.List as L
@@ -18,15 +19,27 @@ import Text.Hamlet (shamlet)
 main = do
   myClick <- select "<div>click here</div>"
   myCount <- select "<div>0</div>"
-  counter <- newIORef (0::Int)
-  let getCount = atomicModifyIORef counter (\c -> let c' = c+1 in (c', T.pack $ show c'))
-  click (\_ -> void $ getCount >>= flip setText myCount) def myClick
-  select "body" >>= appendJQuery myClick >>= appendJQuery myCount
+  -- counter <- newIORef (0::Int)
+  -- let getCount = atomicModifyIORef counter (\c -> let c' = c+1 in (c', T.pack $ show c'))
+  -- click (\_ -> void $ getCount >>= flip setText myCount) def myClick
+  -- select "body" >>= appendJQuery myClick >>= appendJQuery myCount
   runStateT stMain initialTodos
   return ()
 
 stMain :: StateT Todos IO ()
 stMain = do
+  myClick <- lift $ select "<div>click here</div>"
+  myCount <- lift $ select "<div>0</div>"
+  counter <- lift $ newIORef (0::Int)
+  let getCount = lift $ atomicModifyIORef counter (\c -> let c' = c+1 in (c', T.pack $ show c'))
+      showCount _ = do
+        x <- getCount
+        setText x myCount
+        return ()
+  control $ \run -> click showCount def myClick
+  -- lift $ click showCount def myClick
+  lift $ select "body" >>= appendJQuery myClick >>= appendJQuery myCount
+  
   myThing <- fetchTodoList
   lift $ select "#todo-list-div" >>= appendJQuery myThing
   return ()
