@@ -5,7 +5,7 @@ module Main where
 
 import Prelude hiding ((++))
 
-import ClassyPrelude ((++))
+import ClassyPrelude ((++), readMay)
 import Control.Monad
 import Control.Monad.State (StateT, get, lift, runStateT, put)
 import Control.Monad.Trans.Control (control)
@@ -21,7 +21,6 @@ import Text.Blaze.Html.Renderer.Text (renderHtml)
 import Text.Hamlet (shamlet)
 
 main = do
-  -- myClick <- select "<div>click here</div>"
   let ts = initialTodos
   todoRef <- newIORef ts
   l <- todoList todoRef
@@ -36,31 +35,27 @@ main = do
         setText x myCount
         return ()
   let destroy e = do
-	x <- target e >>= selectElement >>= getAttr "n"
-        -- y <- parentsUntil "li" (Just "li") x
-        y <- select $ "#todo-list-" ++ x
-	detach y
-	return ()
-  -- click showCount def myClick
-  -- buts <- find "button.destroy" l
-  -- buts <- select "button#destroy-16"
+	xs <- target e >>= selectElement >>= getAttr "n"
+	let mx = readMay xs
+	case mx of
+          Nothing -> return ()
+          Just n -> do
+            atomicModifyIORef todoRef $ todoDestroy n
+            select ("#todo-list-" ++ xs) >>= detach
+            updateBindings todoRef
+            return ()
   buts <- select "button.destroy"
   click destroy def buts
-  -- lift $ click showCount def myClick
-  -- select "body" >>= appendJQuery myClick >>= appendJQuery myCount
-  select "body" >>= appendJQuery myCount
-  
+  -- select "body" >>= appendJQuery myCount
   --myThing <- fetchTodoList
   -- lift $ select "#todo-list-div" >>= appendJQuery myThing
   return ()
 
-thing :: Int -> IO ()
-thing i = do
-  myThing <- select "<div>this is my new thing!</div>"
-  select "body" >>= appendJQuery myThing
-  select (T.append "#todo-list-" (T.pack (show i))) >>= detach
-  -- select "#todo-list-3" >>= detach
-  return ()
+todoDestroy n ts =
+  let mt = L.find (\(x,_,_) -> x == n) ts
+  in case mt of
+    Nothing -> (ts, ())
+    Just t -> (L.delete t ts, ())
 
 thing2 :: Int -> StateT Todos IO ()
 thing2 i = do
@@ -74,17 +69,17 @@ thing2 i = do
     Just t -> do
       put $ L.delete t ts
       lift $ select (T.append "#todo-list-" (T.pack (show i))) >>= detach
-      updateBindings
+      -- updateBindings
       return ()
 
-updateBindings = do
-  myThing <- lift $ select "<div>this is my new thing!</div>"
-  lift $ select "body" >>= appendJQuery myThing
-  ts <- get
-  let left = L.length $ L.filter (\(_, _, c) -> c) ts
-  e <- lift $ select "#todo-count strong"
+updateBindings r = do
+  ts <- readIORef r
+  myThing <- select $ "<div>" ++ (T.pack $ show ts) ++ "</div>"
+  select "body" >>= appendJQuery myThing
+  let left = L.length $ L.filter (\(_, _, c) -> Prelude.not c) ts
+  e <- select "#todo-count strong"
   -- e <- lift $ select "#todo-count"
-  lift $ setText (T.pack $ show left) e
+  setText (T.pack $ show left) e
   
 todoList r = do
   ts <- readIORef r
