@@ -17,31 +17,26 @@ import Text.Blaze.Html.Renderer.Text (renderHtml)
 import Text.Hamlet (shamlet)
 
 main = do
-  myClick <- select "<div>click here</div>"
+  -- myClick <- select "<div>click here</div>"
+  todoRef <- newIORef initialTodos
+  l <- todoList todoRef
+  select "#todo-list-div" >>= appendJQuery l
+  myClick <- select "#destroy-3"
   myCount <- select "<div>0</div>"
-  -- counter <- newIORef (0::Int)
-  -- let getCount = atomicModifyIORef counter (\c -> let c' = c+1 in (c', T.pack $ show c'))
-  -- click (\_ -> void $ getCount >>= flip setText myCount) def myClick
-  -- select "body" >>= appendJQuery myClick >>= appendJQuery myCount
-  runStateT stMain initialTodos
-  return ()
-
-stMain :: StateT Todos IO ()
-stMain = do
-  myClick <- lift $ select "<div>click here</div>"
-  myCount <- lift $ select "<div>0</div>"
-  counter <- lift $ newIORef (0::Int)
-  let getCount = lift $ atomicModifyIORef counter (\c -> let c' = c+1 in (c', T.pack $ show c'))
+  let getCount = atomicModifyIORef todoRef
+			(\c -> let c' = tail c
+                                in (c', T.pack $ show (length c')))
       showCount _ = do
         x <- getCount
         setText x myCount
         return ()
-  control $ \run -> click showCount def myClick
+  click showCount def myClick
   -- lift $ click showCount def myClick
-  lift $ select "body" >>= appendJQuery myClick >>= appendJQuery myCount
+  -- select "body" >>= appendJQuery myClick >>= appendJQuery myCount
+  select "body" >>= appendJQuery myCount
   
-  myThing <- fetchTodoList
-  lift $ select "#todo-list-div" >>= appendJQuery myThing
+  --myThing <- fetchTodoList
+  -- lift $ select "#todo-list-div" >>= appendJQuery myThing
   return ()
 
 thing :: Int -> IO ()
@@ -76,17 +71,16 @@ updateBindings = do
   -- e <- lift $ select "#todo-count"
   lift $ setText (T.pack $ show left) e
   
---           <button class="destroy" onclick="h$run(h$mainZCMainzithing)">
-fetchTodoList = do
-  ts <- get
-  lift $ select $ T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
+todoList r = do
+  ts <- readIORef r
+  select $ T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
     <ul #todo-list>
       $forall (i, t, c) <- ts
         <li :c:.completed #todo-list-#{i}>
           <input .toggle type=checkbox>
           <label>
             #{t}
-          <button class=destroy onclick=delete_helper(#{i})>
+          <button #destroy-#{i} class=destroy>
   |]
 
 type Todo = (Int, Text, Bool)
