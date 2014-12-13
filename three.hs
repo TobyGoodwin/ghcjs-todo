@@ -3,6 +3,9 @@
 
 module Main where
 
+import Prelude hiding ((++))
+
+import ClassyPrelude ((++))
 import Control.Monad
 import Control.Monad.State (StateT, get, lift, runStateT, put)
 import Control.Monad.Trans.Control (control)
@@ -12,6 +15,7 @@ import qualified Data.List as L
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as LT
+import GHCJS.Foreign
 import JavaScript.JQuery
 import Text.Blaze.Html.Renderer.Text (renderHtml)
 import Text.Hamlet (shamlet)
@@ -32,14 +36,15 @@ main = do
         setText x myCount
         return ()
   let destroy e = do
-	x <- target e >>= selectElement
+	x <- target e >>= selectElement >>= getAttr "n"
         -- y <- parentsUntil "li" (Just "li") x
-        y <- select "#todo-list-16"
+        y <- select $ "#todo-list-" ++ x
 	detach y
 	return ()
   -- click showCount def myClick
   -- buts <- find "button.destroy" l
-  buts <- select "button#destroy-16"
+  -- buts <- select "button#destroy-16"
+  buts <- select "button.destroy"
   click destroy def buts
   -- lift $ click showCount def myClick
   -- select "body" >>= appendJQuery myClick >>= appendJQuery myCount
@@ -90,7 +95,7 @@ todoList r = do
           <input .toggle type=checkbox>
           <label>
             #{t}
-          <button #destroy-#{i} class=destroy>
+          <button #destroy-#{i} n=#{i} class=destroy>
   |]
 
 type Todo = (Int, Text, Bool)
