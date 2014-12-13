@@ -23,18 +23,7 @@ main = do
   let ts = initialTodos
   todoRef <- newIORef ts
   updateTodos todoRef
---  myClick <- select "#destroy-3"
---  myCount <- select "<div>0</div>"
---  let getCount = atomicModifyIORef todoRef
---			(\c -> let c' = L.tail c
---                                in (c', tshow (length c')))
---      showCount _ = do
---        x <- getCount
---        setText x myCount
---        return ()
-  -- select "body" >>= appendJQuery myCount
-  --myThing <- fetchTodoList
-  -- lift $ select "#todo-list-div" >>= appendJQuery myThing
+  updateBindings todoRef
   return ()
 
 updateTodos todoRef = do
@@ -64,7 +53,6 @@ toggle todoRef e = do
     Nothing -> return ()
     Just n -> do
       atomicModifyIORef todoRef $ todoToggle n
-      -- target e >>= selectElement >>= toggle
       updateTodos todoRef
       updateBindings todoRef
       return ()
@@ -91,12 +79,13 @@ updateBindings r = do
   select "#bind-n-done" >>= setText (tshow nDone)
   
 todoList r = do
-  ts <- readIORef r
+  ts <- sort <$> readIORef r
+  -- let ts1 = sort ts0
   return $ T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
     <ul #todo-list>
       $forall (i, t, c) <- ts
         <li :c:.completed #todo-list-#{i}>
-          <input .toggle n=#{i} type=checkbox>
+          <input .toggle n=#{i} type=checkbox :c:checked>
           <label>
             #{t}
           <button .destroy n=#{i}>
@@ -107,7 +96,7 @@ type Todos = [Todo]
 
 initialTodos :: Todos
 initialTodos = 
-  [ (19, "Steal underpants", True)
-  , (3, "???", False)
+  [ (3, "Steal underpants", True)
+  , (14, "???", False)
   , (16, "Profit!", False)
   ]
