@@ -16,6 +16,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as LT
 import GHCJS.Foreign
 import JavaScript.JQuery hiding (not)
+import qualified JavaScript.JQuery as J
 import Text.Blaze.Html.Renderer.Text (renderHtml)
 import Text.Hamlet (shamlet)
 
@@ -23,6 +24,8 @@ main = do
   let ts = initialTodos
   todoRef <- newIORef ts
   updateTodos todoRef
+  select "input#new-todo" >>=
+    J.on (create todoRef) "keyup" def
 --  myClick <- select "#destroy-3"
 --  myCount <- select "<div>0</div>"
 --  let getCount = atomicModifyIORef todoRef
@@ -68,6 +71,11 @@ toggle todoRef e = do
       updateTodos todoRef
       updateBindings todoRef
       return ()
+
+create todoRef e = do
+  myThing <- select $ "<div>create called!</div>"
+  select "body" >>= appendJQuery myThing
+  return ()
 
 todoDestroy n ts =
   let mt = L.find (\(x,_,_) -> x == n) ts
