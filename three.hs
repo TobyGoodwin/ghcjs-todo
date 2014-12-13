@@ -4,9 +4,10 @@
 module Main where
 
 import Control.Monad
-import Control.Monad.State (StateT, get, lift, runStateT)
+import Control.Monad.State (StateT, get, lift, runStateT, put)
 import Data.Default
 import Data.IORef
+import qualified Data.List as L
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as LT
@@ -38,6 +39,30 @@ thing i = do
   -- select "#todo-list-3" >>= detach
   return ()
 
+thing2 :: Int -> StateT Todos IO ()
+thing2 i = do
+  ts <- get
+  let mt = L.find (\(x,_,_) -> x == i) ts
+  case mt of
+    Nothing -> do
+      myThing <- lift $ select "<div>not found</div>"
+      lift $ select "body" >>= appendJQuery myThing
+      return ()
+    Just t -> do
+      put $ L.delete t ts
+      lift $ select (T.append "#todo-list-" (T.pack (show i))) >>= detach
+      updateBindings
+      return ()
+
+updateBindings = do
+  myThing <- lift $ select "<div>this is my new thing!</div>"
+  lift $ select "body" >>= appendJQuery myThing
+  ts <- get
+  let left = L.length $ L.filter (\(_, _, c) -> c) ts
+  e <- lift $ select "#todo-count strong"
+  -- e <- lift $ select "#todo-count"
+  lift $ setText (T.pack $ show left) e
+  
 --           <button class="destroy" onclick="h$run(h$mainZCMainzithing)">
 fetchTodoList = do
   ts <- get
