@@ -76,10 +76,12 @@ updateBindings r = do
   ts <- readIORef r
   myThing <- select $ "<div>" ++ (T.pack $ show ts) ++ "</div>"
   select "body" >>= appendJQuery myThing
-  let left = L.length $ L.filter (\(_, _, c) -> Prelude.not c) ts
-  e <- select "#todo-count strong"
+  let nDone = L.length $ L.filter (\(_, _, c) -> c) ts
+      nLeft = L.length ts - nDone
+  select "#bind-n-left" >>= setText (T.pack $ show nLeft)
+  select "#bind-n-done" >>= setText (T.pack $ show nDone)
   -- e <- lift $ select "#todo-count"
-  setText (T.pack $ show left) e
+  -- setText (T.pack $ show nLeft) e
   
 todoList r = do
   ts <- readIORef r
