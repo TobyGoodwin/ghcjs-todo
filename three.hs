@@ -18,7 +18,8 @@ import Text.Hamlet (shamlet)
 
 main = do
   -- myClick <- select "<div>click here</div>"
-  todoRef <- newIORef initialTodos
+  let ts = initialTodos
+  todoRef <- newIORef ts
   l <- todoList todoRef
   select "#todo-list-div" >>= appendJQuery l
   myClick <- select "#destroy-3"
@@ -30,7 +31,16 @@ main = do
         x <- getCount
         setText x myCount
         return ()
-  click showCount def myClick
+  let destroy e = do
+	x <- target e >>= selectElement
+        -- y <- parentsUntil "li" (Just "li") x
+        y <- select "#todo-list-16"
+	detach y
+	return ()
+  -- click showCount def myClick
+  -- buts <- find "button.destroy" l
+  buts <- select "button#destroy-16"
+  click destroy def buts
   -- lift $ click showCount def myClick
   -- select "body" >>= appendJQuery myClick >>= appendJQuery myCount
   select "body" >>= appendJQuery myCount
