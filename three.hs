@@ -16,7 +16,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as LT
 import GHCJS.Foreign
-import JavaScript.JQuery hiding (not)
+import JavaScript.JQuery hiding (filter, find, not)
 import qualified JavaScript.JQuery as J
 import Text.Blaze.Html.Renderer.Text (renderHtml)
 import Text.Hamlet (shamlet)
@@ -25,10 +25,9 @@ main = do
   let ts = initialTodos
   todoRef <- newIORef ts
   updateTodos todoRef
-  select "input#new-todo" >>=
-    J.on (create todoRef) "keyup" def
+  select "input#new-todo" >>= J.on (create todoRef) "keyup" def
+  select "button#clear-completed" >>= click (clearCompleted todoRef) def
   updateBindings todoRef
-  return ()
 
 updateTodos todoRef = do
   l <- todoList todoRef
@@ -38,6 +37,8 @@ updateTodos todoRef = do
   click (destroy todoRef) def buts
   togs <- select "input.toggle"
   click (toggle todoRef) def togs
+  select "#todo-list label" >>= click (beginEdit todoRef) def
+  return ()
 
 destroy todoRef e = do
   xs <- target e >>= selectElement >>= getAttr "n"
@@ -48,7 +49,6 @@ destroy todoRef e = do
       atomicModifyIORef todoRef $ app1Ref todoDestroy n
       select ("#todo-list-" ++ xs) >>= detach
       updateBindings todoRef
-      return ()
 
 toggle todoRef e = do
   xs <- target e >>= selectElement >>= getAttr "n"
@@ -73,7 +73,45 @@ create todoRef e = do
     updateTodos todoRef
     updateBindings todoRef
 
+beginEdit todoRef e = do
+  x <- target e >>= selectElement
+  p <- parent x
+  nt <- getAttr "n" p
+  let n = fromMaybe 0 $ readMay nt
+  t <- getText x
+  let i = T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
+    <li .editing>
+      <input .edit value=#{t}>
+  |]
+  replaceWith i p
+  s <- select "input.edit"
+  J.on (acceptEdit todoRef n) "focusout"  def s
+  J.on (keyEdit todoRef n) "keyup"  def s
+  focus s
+  return ()
+
+keyEdit todoRef n e = do
+  k <- which e
+  when (chr k == '\r') $ acceptEdit todoRef n e
+  when (chr k == '\ESC') $ updateTodos todoRef -- abort
+  
+acceptEdit todoRef n e = do
+  x <- target e >>= selectElement
+  v <- getVal x
+  atomicModifyIORef todoRef $ app2Ref todoUpdate n v
+  updateTodos todoRef
+
+clearCompleted todoRef e = do
+  atomicModifyIORef todoRef $ app0Ref todoClear
+  updateTodos todoRef
+  updateBindings todoRef
+
+app0Ref f x = (f x, ())
 app1Ref f x y = (f x y, ())
+app2Ref f x y z = (f x y z, ())
+
+todoClear :: [Todo] -> [Todo]
+todoClear = filter (\(_, _, c) -> not c)
 
 todoCreate :: Text -> [Todo] -> [Todo]
 todoCreate t ts =
@@ -92,6 +130,12 @@ todoToggle n ts =
     Nothing -> ts
     Just todo@(i, t, c) -> (i, t, not c) : L.delete todo ts
 
+todoUpdate :: Int -> Text -> [Todo] -> [Todo]
+todoUpdate n t ts =
+  case find (\(x,_,_) -> x == n) ts of
+    Nothing -> todoCreate t ts
+    Just todo@(i, _, c) -> (i, t, c) : L.delete todo ts
+
 updateBindings r = do
   ts <- readIORef r
   myThing <- select $ "<div>" ++ tshow ts ++ "</div>"
@@ -106,11 +150,10 @@ updateBindings r = do
   
 todoList r = do
   ts <- sort <$> readIORef r
-  -- let ts1 = sort ts0
   return $ T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
     <ul #todo-list>
       $forall (i, t, c) <- ts
-        <li :c:.completed #todo-list-#{i}>
+        <li :c:.completed n=#{i}>
           <input .toggle n=#{i} type=checkbox :c:checked>
           <label>
             #{t}
