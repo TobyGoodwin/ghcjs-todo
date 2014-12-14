@@ -15,7 +15,6 @@ import qualified Data.List as L hiding ((++))
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as LT
-import GHCJS.Foreign
 import JavaScript.JQuery hiding (filter, find, not)
 import qualified JavaScript.JQuery as J
 import Text.Blaze.Html.Renderer.Text (renderHtml)
@@ -27,6 +26,7 @@ main = do
   updateTodos todoRef
   select "input#new-todo" >>= J.on (create todoRef) "keyup" def
   select "button#clear-completed" >>= click (clearCompleted todoRef) def
+  select "input#toggle-all" >>= click (toggleAll todoRef) def
   updateBindings todoRef
 
 updateTodos todoRef = do
@@ -59,7 +59,12 @@ toggle todoRef e = do
       atomicModifyIORef todoRef $ app1Ref todoToggle n
       updateTodos todoRef -- XXX shouldn't replace complete list
       updateBindings todoRef
-      return ()
+
+toggleAll todoRef e = do
+  x <- target e >>= selectElement >>= is ":checked"
+  atomicModifyIORef todoRef $ app0Ref (if x then todoAllSet else todoAllReset)
+  updateTodos todoRef -- XXX shouldn't replace complete list
+  updateBindings todoRef
 
 create todoRef e = do
   k <- which e
@@ -110,6 +115,12 @@ app0Ref f x = (f x, ())
 app1Ref f x y = (f x y, ())
 app2Ref f x y z = (f x y z, ())
 
+todoAllSet :: [Todo] -> [Todo]
+todoAllSet = map (\(i, t, _) -> (i, t, True))
+
+todoAllReset :: [Todo] -> [Todo]
+todoAllReset = map (\(i, t, _) -> (i, t, False))
+
 todoClear :: [Todo] -> [Todo]
 todoClear = filter (\(_, _, c) -> not c)
 
@@ -146,6 +157,8 @@ updateBindings r = do
   select "#bind-n-done" >>= setText (tshow nDone)
   select "button#clear-completed" >>=
     setAttr "style" (if nDone == 0 then "display:none" else "display:block")
+  select "input#toggle-all"
+    >>= if nLeft == 0 then setProp "checked" "true" else removeProp "checked"
   return ()
   
 todoList r = do
