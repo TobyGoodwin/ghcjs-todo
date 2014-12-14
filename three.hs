@@ -153,7 +153,9 @@ updateBindings r = do
   select "body" >>= appendJQuery myThing
   let nDone = L.length $ L.filter (\(_, _, c) -> c) ts
       nLeft = L.length ts - nDone
+      pLeft = (if nLeft == 1 then "item" else "items") ++ " left"
   select "#bind-n-left" >>= setText (tshow nLeft)
+  select "#bind-phrase-left" >>= setText pLeft
   select "#bind-n-done" >>= setText (tshow nDone)
   select "button#clear-completed" >>=
     setAttr "style" (if nDone == 0 then "display:none" else "display:block")
