@@ -10,6 +10,7 @@ import Control.Monad
 import Control.Monad.State (StateT, get, lift, runStateT, put)
 import Data.Default
 -- import Data.IORef
+import Data.Char (chr)
 import qualified Data.List as L hiding ((++))
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -61,9 +62,21 @@ toggle todoRef e = do
       return ()
 
 create todoRef e = do
-  myThing <- select $ "<div>create called!</div>"
-  select "body" >>= appendJQuery myThing
-  return ()
+  k <- which e
+  when (chr k == '\r') $ do
+    i <- select "input#new-todo"
+    v <- getVal i
+    setVal "" i
+    myThing <- select $ "<div>create called: " ++ tshow v ++ "</div>"
+    select "body" >>= appendJQuery myThing
+    atomicModifyIORef todoRef $ todoCreate v
+    updateTodos todoRef
+    updateBindings todoRef
+
+todoCreate :: Text -> [Todo] -> ([Todo], ())
+todoCreate t ts =
+  let n = fromMaybe 0 $ maximumMay $ map (\(x, _, _) -> x) ts
+  in ((n+1, t, False) : ts, ())
 
 todoDestroy n ts =
   let mt = L.find (\(x,_,_) -> x == n) ts
@@ -85,6 +98,7 @@ updateBindings r = do
       nLeft = L.length ts - nDone
   select "#bind-n-left" >>= setText (tshow nLeft)
   select "#bind-n-done" >>= setText (tshow nDone)
+  return ()
   
 todoList r = do
   ts <- sort <$> readIORef r
