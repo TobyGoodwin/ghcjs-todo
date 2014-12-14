@@ -45,7 +45,7 @@ destroy todoRef e = do
   case mx of
     Nothing -> return ()
     Just n -> do
-      atomicModifyIORef todoRef $ todoDestroy n
+      atomicModifyIORef todoRef $ app1Ref todoDestroy n
       select ("#todo-list-" ++ xs) >>= detach
       updateBindings todoRef
       return ()
@@ -56,8 +56,8 @@ toggle todoRef e = do
   case mx of
     Nothing -> return ()
     Just n -> do
-      atomicModifyIORef todoRef $ todoToggle n
-      updateTodos todoRef
+      atomicModifyIORef todoRef $ app1Ref todoToggle n
+      updateTodos todoRef -- XXX shouldn't replace complete list
       updateBindings todoRef
       return ()
 
@@ -69,26 +69,28 @@ create todoRef e = do
     setVal "" i
     myThing <- select $ "<div>create called: " ++ tshow v ++ "</div>"
     select "body" >>= appendJQuery myThing
-    atomicModifyIORef todoRef $ todoCreate v
+    atomicModifyIORef todoRef $ app1Ref todoCreate v
     updateTodos todoRef
     updateBindings todoRef
 
-todoCreate :: Text -> [Todo] -> ([Todo], ())
+app1Ref f x y = (f x y, ())
+
+todoCreate :: Text -> [Todo] -> [Todo]
 todoCreate t ts =
   let n = fromMaybe 0 $ maximumMay $ map (\(x, _, _) -> x) ts
-  in ((n+1, t, False) : ts, ())
+  in (n+1, t, False) : ts
 
 todoDestroy n ts =
   let mt = L.find (\(x,_,_) -> x == n) ts
   in case mt of
-    Nothing -> (ts, ())
-    Just t -> (L.delete t ts, ())
+    Nothing -> ts
+    Just t -> L.delete t ts
 
 todoToggle n ts =
   let mt = L.find (\(x,_,_) -> x == n) ts
   in case mt of
-    Nothing -> (ts, ())
-    Just todo@(i, t, c) -> ((i, t, not c) : L.delete todo ts, ())
+    Nothing -> ts
+    Just todo@(i, t, c) -> (i, t, not c) : L.delete todo ts
 
 updateBindings r = do
   ts <- readIORef r
@@ -98,6 +100,8 @@ updateBindings r = do
       nLeft = L.length ts - nDone
   select "#bind-n-left" >>= setText (tshow nLeft)
   select "#bind-n-done" >>= setText (tshow nDone)
+  select "button#clear-completed" >>=
+    setAttr "style" (if nDone == 0 then "display:none" else "display:block")
   return ()
   
 todoList r = do
