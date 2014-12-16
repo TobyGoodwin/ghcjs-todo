@@ -15,12 +15,23 @@ import qualified Data.List as L hiding ((++))
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as LT
+import GHCJS.Prim (fromJSString)
+import GHCJS.Types (JSString)
 import JavaScript.JQuery hiding (filter, find, not)
 import qualified JavaScript.JQuery as J
 import Text.Blaze.Html.Renderer.Text (renderHtml)
 import Text.Hamlet (shamlet)
 
+foreign import javascript unsafe "$r = window.location.href;" windowLocationHRef :: IO JSString
+
 main = do
+  mf <- lookupQueryString "filter"
+  let f = fromMaybe "all" mf
+  h <- windowLocationHRef
+  myThing <- select $ "<div>url: " ++ T.pack (fromJSString h) ++ "</div>"
+  select "body" >>= appendJQuery myThing
+  myThing <- select $ "<div>filter: " ++ f ++ "</div>"
+  select "body" >>= appendJQuery myThing
   let ts = initialTodos
   todoRef <- newIORef ts
   updateTodos todoRef
@@ -184,3 +195,13 @@ initialTodos =
   , (14, "???", False)
   , (16, "Profit!", False)
   ]
+
+-- doesn't decode
+lookupQueryString :: Text -> IO (Maybe Text)
+lookupQueryString k = do
+  uj <- windowLocationHRef
+  let u = T.pack $ fromJSString uj
+      (_, q) = T.breakOnEnd "?" u
+      qs0 = T.splitOn "&" q -- XXX ";" is permitted, although rare
+      qs1 = map (T.breakOnEnd "=") qs0
+  return $ lookup (k ++ "=") qs1
