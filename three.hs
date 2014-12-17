@@ -52,13 +52,14 @@ updateTodos todoRef = do
   return ()
 
 destroy todoRef e = do
-  xs <- target e >>= selectElement >>= getAttr "n"
-  let mx = readMay xs
-  case mx of
+  x <- target e >>= selectElement
+  a <- getAttr "n" x
+  let mn = readMay a
+  case mn of
     Nothing -> return ()
     Just n -> do
       atomicModifyIORef todoRef $ app1Ref todoDestroy n
-      select ("#todo-list-" ++ xs) >>= detach
+      parent x >>= detach
       updateBindings todoRef
 
 toggle todoRef e = do
