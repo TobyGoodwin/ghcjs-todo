@@ -37,53 +37,58 @@ main = do
   myThing <- select $ "<div>filter: " ++ f ++ "</div>"
   select "body" >>= appendJQuery myThing
   let ts = initialTodos
-  todoRef <- newIORef ts
-  updateTodos todoRef
-  select "input#new-todo" >>= J.on (create todoRef) "keyup" def
-  select "button#clear-completed" >>= click (clearCompleted todoRef) def
-  select "input#toggle-all" >>= click (toggleAll todoRef) def
-  updateBindings todoRef
+      s = case f of
+            "active" -> State (\(_, _, c) -> not c) ts
+            "completed" -> State (\(_, _, c) -> c) ts
+            _ -> State (const True) ts
+  stateRef <- newIORef s
+  updateTodos stateRef
+  select "input#new-todo" >>= J.on (create stateRef) "keyup" def
+  select "button#clear-completed" >>= click (clearCompleted stateRef) def
+  select "input#toggle-all" >>= click (toggleAll stateRef) def
+  updateBindings stateRef
   -- setWindowLocationHash $ toJSString "hash"
 
-updateTodos todoRef = do
-  l <- todoList todoRef
+updateTodos :: IORef State -> IO ()
+updateTodos stateRef = do
+  l <- todoList stateRef
   s <- select "#todo-list"
   replaceWith l s
   buts <- select "button.destroy"
-  click (destroy todoRef) def buts
+  click (destroy stateRef) def buts
   togs <- select "input.toggle"
-  click (toggle todoRef) def togs
-  select "#todo-list label" >>= click (beginEdit todoRef) def
+  click (toggle stateRef) def togs
+  select "#todo-list label" >>= click (beginEdit stateRef) def
   return ()
 
-destroy todoRef e = do
+destroy stateRef e = do
   x <- target e >>= selectElement
   a <- getAttr "n" x
   let mn = readMay a
   case mn of
     Nothing -> return ()
     Just n -> do
-      atomicModifyIORef todoRef $ app1Ref todoDestroy n
+      atomicModifyIORef stateRef $ app1Ref todoDestroy n
       parent x >>= detach
-      updateBindings todoRef
+      updateBindings stateRef
 
-toggle todoRef e = do
+toggle stateRef e = do
   xs <- target e >>= selectElement >>= getAttr "n"
   let mx = readMay xs
   case mx of
     Nothing -> return ()
     Just n -> do
-      atomicModifyIORef todoRef $ app1Ref todoToggle n
-      updateTodos todoRef -- XXX shouldn't replace complete list
-      updateBindings todoRef
+      atomicModifyIORef stateRef $ app1Ref todoToggle n
+      updateTodos stateRef -- XXX shouldn't replace complete list
+      updateBindings stateRef
 
-toggleAll todoRef e = do
+toggleAll stateRef e = do
   x <- target e >>= selectElement >>= is ":checked"
-  atomicModifyIORef todoRef $ app0Ref (if x then todoAllSet else todoAllReset)
-  updateTodos todoRef -- XXX shouldn't replace complete list
-  updateBindings todoRef
+  atomicModifyIORef stateRef $ app0Ref (if x then todoAllSet else todoAllReset)
+  updateTodos stateRef -- XXX shouldn't replace complete list
+  updateBindings stateRef
 
-create todoRef e = do
+create stateRef e = do
   k <- which e
   when (chr k == '\r') $ do
     i <- select "input#new-todo"
@@ -91,11 +96,11 @@ create todoRef e = do
     setVal "" i
     myThing <- select $ "<div>create called: " ++ tshow v ++ "</div>"
     select "body" >>= appendJQuery myThing
-    atomicModifyIORef todoRef $ app1Ref todoCreate v
-    updateTodos todoRef
-    updateBindings todoRef
+    atomicModifyIORef stateRef $ app1Ref todoCreate v
+    updateTodos stateRef
+    updateBindings stateRef
 
-beginEdit todoRef e = do
+beginEdit stateRef e = do
   x <- target e >>= selectElement
   p <- parent x
   nt <- getAttr "n" p
@@ -107,30 +112,30 @@ beginEdit todoRef e = do
   |]
   replaceWith i p
   s <- select "input.edit"
-  J.on (acceptEdit todoRef n) "focusout"  def s
-  J.on (keyEdit todoRef n) "keyup"  def s
+  J.on (acceptEdit stateRef n) "focusout"  def s
+  J.on (keyEdit stateRef n) "keyup"  def s
   focus s
   return ()
 
-keyEdit todoRef n e = do
+keyEdit stateRef n e = do
   k <- which e
-  when (chr k == '\r') $ acceptEdit todoRef n e
-  when (chr k == '\ESC') $ updateTodos todoRef -- abort
+  when (chr k == '\r') $ acceptEdit stateRef n e
+  when (chr k == '\ESC') $ updateTodos stateRef -- abort
   
-acceptEdit todoRef n e = do
+acceptEdit stateRef n e = do
   x <- target e >>= selectElement
   v <- getVal x
-  atomicModifyIORef todoRef $ app2Ref todoUpdate n v
-  updateTodos todoRef
+  atomicModifyIORef stateRef $ app2Ref todoUpdate n v
+  updateTodos stateRef
 
-clearCompleted todoRef e = do
-  atomicModifyIORef todoRef $ app0Ref todoClear
-  updateTodos todoRef
-  updateBindings todoRef
+clearCompleted stateRef e = do
+  atomicModifyIORef stateRef $ app0Ref todoClear
+  updateTodos stateRef
+  updateBindings stateRef
 
-app0Ref f x = (f x, ())
-app1Ref f x y = (f x y, ())
-app2Ref f x y z = (f x y z, ())
+app0Ref f (State a ts) = (State a (f ts), ())
+app1Ref f p (State a ts) = (State a (f p ts), ())
+app2Ref f p q (State a ts) = (State a (f p q ts), ())
 
 todoAllSet :: [Todo] -> [Todo]
 todoAllSet = map (\(i, t, _) -> (i, t, True))
@@ -164,8 +169,8 @@ todoUpdate n t ts =
     Nothing -> todoCreate t ts
     Just todo@(i, _, c) -> (i, t, c) : L.delete todo ts
 
-updateBindings r = do
-  ts <- readIORef r
+updateBindings stateRef = do
+  State f ts <- readIORef stateRef
   myThing <- select $ "<div>" ++ tshow ts ++ "</div>"
   select "body" >>= appendJQuery myThing
   let nDone = L.length $ L.filter (\(_, _, c) -> c) ts
@@ -180,8 +185,9 @@ updateBindings r = do
     >>= if nLeft == 0 then setProp "checked" "true" else removeProp "checked"
   return ()
   
-todoList r = do
-  ts <- sort <$> readIORef r
+todoList stateRef = do
+  State f ts0 <- readIORef stateRef
+  let ts = sort $ filter f ts0
   return $ T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
     <ul #todo-list>
       $forall (i, t, c) <- ts
@@ -193,28 +199,12 @@ todoList r = do
   |]
 
 type Todo = (Int, Text, Bool)
-type Todos = [Todo]
+type Filter = Todo -> Bool
+data State = State Filter [Todo]
 
-initialTodos :: Todos
-initialTodos = 
+initialTodos :: [Todo]
+initialTodos =
   [ (3, "Steal underpants", True)
   , (14, "???", False)
   , (16, "Profit!", False)
   ]
-
--- lookupHash :: IO Text
--- lookupHash = do
---   uj <- windowLocationHash
---   let u = T.pack $ fromJSString uj
---       (_, h) = T.breakOn "#" u
---   return $ T.drop 1 h
-  
--- doesn't decode
--- lookupQueryString :: Text -> IO (Maybe Text)
--- lookupQueryString k = do
---   uj <- windowLocationHRef
---   let u = T.pack $ fromJSString uj
---       (_, q) = T.breakOnEnd "?" u
---       qs0 = T.splitOn "&" q -- XXX ";" is permitted, although rare
---       qs1 = map (T.breakOnEnd "=") qs0
---   return $ lookup (k ++ "=") qs1
