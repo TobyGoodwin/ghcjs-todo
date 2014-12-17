@@ -27,6 +27,7 @@ foreign import javascript unsafe "$r = window.location.href;" windowLocationHRef
 main = do
   mf <- lookupQueryString "filter"
   let f = fromMaybe "all" mf
+  select ("a#filter-" ++ f) >>= addClass "selected"
   h <- windowLocationHRef
   myThing <- select $ "<div>url: " ++ T.pack (fromJSString h) ++ "</div>"
   select "body" >>= appendJQuery myThing
