@@ -15,22 +15,25 @@ import qualified Data.List as L hiding ((++))
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as LT
-import GHCJS.Prim (fromJSString)
+import GHCJS.Prim (fromJSString, toJSString)
 import GHCJS.Types (JSString)
 import JavaScript.JQuery hiding (filter, find, not)
 import qualified JavaScript.JQuery as J
 import Text.Blaze.Html.Renderer.Text (renderHtml)
 import Text.Hamlet (shamlet)
 
-foreign import javascript unsafe "$r = window.location.href;" windowLocationHRef :: IO JSString
+foreign import javascript unsafe "$r = window.location.hash;"
+  windowLocationHash :: IO JSString
+foreign import javascript safe   "window.location.hash = $1;"
+  setWindowLocationHash :: JSString -> IO ()
 
 main = do
-  mf <- lookupQueryString "filter"
-  let f = fromMaybe "all" mf
+  h <- T.pack . fromJSString <$> windowLocationHash
+  let f = if T.null h then "all" else T.drop 1 h
   select ("a#filter-" ++ f) >>= addClass "selected"
-  h <- windowLocationHRef
-  myThing <- select $ "<div>url: " ++ T.pack (fromJSString h) ++ "</div>"
-  select "body" >>= appendJQuery myThing
+  -- h <- windowLocationHRef
+  -- myThing <- select $ "<div>url: " ++ T.pack (fromJSString h) ++ "</div>"
+  -- select "body" >>= appendJQuery myThing
   myThing <- select $ "<div>filter: " ++ f ++ "</div>"
   select "body" >>= appendJQuery myThing
   let ts = initialTodos
@@ -40,6 +43,7 @@ main = do
   select "button#clear-completed" >>= click (clearCompleted todoRef) def
   select "input#toggle-all" >>= click (toggleAll todoRef) def
   updateBindings todoRef
+  -- setWindowLocationHash $ toJSString "hash"
 
 updateTodos todoRef = do
   l <- todoList todoRef
@@ -198,12 +202,19 @@ initialTodos =
   , (16, "Profit!", False)
   ]
 
+-- lookupHash :: IO Text
+-- lookupHash = do
+--   uj <- windowLocationHash
+--   let u = T.pack $ fromJSString uj
+--       (_, h) = T.breakOn "#" u
+--   return $ T.drop 1 h
+  
 -- doesn't decode
-lookupQueryString :: Text -> IO (Maybe Text)
-lookupQueryString k = do
-  uj <- windowLocationHRef
-  let u = T.pack $ fromJSString uj
-      (_, q) = T.breakOnEnd "?" u
-      qs0 = T.splitOn "&" q -- XXX ";" is permitted, although rare
-      qs1 = map (T.breakOnEnd "=") qs0
-  return $ lookup (k ++ "=") qs1
+-- lookupQueryString :: Text -> IO (Maybe Text)
+-- lookupQueryString k = do
+--   uj <- windowLocationHRef
+--   let u = T.pack $ fromJSString uj
+--       (_, q) = T.breakOnEnd "?" u
+--       qs0 = T.splitOn "&" q -- XXX ";" is permitted, although rare
+--       qs1 = map (T.breakOnEnd "=") qs0
+--   return $ lookup (k ++ "=") qs1
