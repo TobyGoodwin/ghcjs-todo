@@ -6,7 +6,6 @@ module Main where
 
 import ClassyPrelude
 
-import Control.Monad
 import Control.Monad.State (StateT, get, lift, runStateT, put)
 import Data.Default
 -- import Data.IORef
@@ -36,16 +35,13 @@ main = do
   -- select "body" >>= appendJQuery myThing
   myThing <- select $ "<div>filter: " ++ f ++ "</div>"
   select "body" >>= appendJQuery myThing
-  let ts = initialTodos
-      s = case f of
-            "active" -> State (\(_, _, c) -> not c) ts
-            "completed" -> State (\(_, _, c) -> c) ts
-            _ -> State (const True) ts
-  stateRef <- newIORef s
+  stateRef <- newIORef (State f initialTodos)
   updateTodos stateRef
   select "input#new-todo" >>= J.on (create stateRef) "keyup" def
   select "button#clear-completed" >>= click (clearCompleted stateRef) def
   select "input#toggle-all" >>= click (toggleAll stateRef) def
+  -- select ("a#filter-" ++ "all") >>= click (moveTo stateRef) def
+  mapM (\f -> select ("a#filter-" ++ f) >>= click (moveTo stateRef) def) ["all", "active", "completed"]
   updateBindings stateRef
   -- setWindowLocationHash $ toJSString "hash"
 
@@ -88,6 +84,19 @@ toggleAll stateRef e = do
   updateTodos stateRef -- XXX shouldn't replace complete list
   updateBindings stateRef
 
+moveTo stateRef e = do
+  x <- target e >>= selectElement >>= getAttr "id"
+  case stripPrefix "filter-" x of
+    Nothing -> return ()
+    Just f -> do
+      myThing <- select $ "<div>moveTo called: " ++ tshow f ++ "</div>"
+      select "body" >>= appendJQuery myThing
+      State o _ <- readIORef stateRef
+      select ("a#filter-" ++ o) >>= removeClass "selected"
+      atomicModifyIORef stateRef $ \(State _ ts) -> (State f ts,())
+      updateTodos stateRef
+      updateBindings stateRef
+  
 create stateRef e = do
   k <- which e
   when (chr k == '\r') $ do
@@ -171,7 +180,7 @@ todoUpdate n t ts =
 
 updateBindings stateRef = do
   State f ts <- readIORef stateRef
-  myThing <- select $ "<div>" ++ tshow ts ++ "</div>"
+  myThing <- select $ "<div>" ++ tshow f ++ "</div>"
   select "body" >>= appendJQuery myThing
   let nDone = L.length $ L.filter (\(_, _, c) -> c) ts
       nLeft = L.length ts - nDone
@@ -183,11 +192,12 @@ updateBindings stateRef = do
     setAttr "style" (if nDone == 0 then "display:none" else "display:block")
   select "input#toggle-all"
     >>= if nLeft == 0 then setProp "checked" "true" else removeProp "checked"
+  select ("a#filter-" ++ f) >>= addClass "selected"
   return ()
   
 todoList stateRef = do
   State f ts0 <- readIORef stateRef
-  let ts = sort $ filter f ts0
+  let ts = sort $ filter (todoFilter f) ts0
   return $ T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
     <ul #todo-list>
       $forall (i, t, c) <- ts
@@ -199,8 +209,9 @@ todoList stateRef = do
   |]
 
 type Todo = (Int, Text, Bool)
+type FilterName = Text
 type Filter = Todo -> Bool
-data State = State Filter [Todo]
+data State = State FilterName [Todo]
 
 initialTodos :: [Todo]
 initialTodos =
@@ -208,3 +219,11 @@ initialTodos =
   , (14, "???", False)
   , (16, "Profit!", False)
   ]
+
+status :: Todo -> Bool
+status (_, _, c) = c
+
+todoFilter :: FilterName -> Filter
+todoFilter "active" = not . status
+todoFilter "completed" = status
+todoFilter _ = const True
