@@ -8,7 +8,6 @@ import ClassyPrelude
 
 import Control.Monad.State (StateT, get, lift, runStateT, put)
 import Data.Default
--- import Data.IORef
 import Data.Char (chr)
 import qualified Data.List as L hiding ((++))
 import Data.Text (Text)
@@ -29,39 +28,33 @@ foreign import javascript safe   "window.location.hash = $1;"
 main = do
   h <- T.pack . fromJSString <$> windowLocationHash
   let f = if T.null h then "all" else T.drop 1 h
-  select ("a#filter-" ++ f) >>= addClass "selected"
-  -- h <- windowLocationHRef
-  -- myThing <- select $ "<div>url: " ++ T.pack (fromJSString h) ++ "</div>"
-  -- select "body" >>= appendJQuery myThing
-  myThing <- select $ "<div>filter: " ++ f ++ "</div>"
-  select "body" >>= appendJQuery myThing
   stateRef <- newIORef (State f initialTodos)
   updateTodos stateRef
+  updateBindings stateRef
+  initClicks stateRef
+
+initClicks stateRef = do
   select "input#new-todo" >>= J.on (create stateRef) "keyup" def
   select "button#clear-completed" >>= click (clearCompleted stateRef) def
   select "input#toggle-all" >>= click (toggleAll stateRef) def
-  -- select ("a#filter-" ++ "all") >>= click (moveTo stateRef) def
-  mapM (\f -> select ("a#filter-" ++ f) >>= click (moveTo stateRef) def) ["all", "active", "completed"]
-  updateBindings stateRef
-  -- setWindowLocationHash $ toJSString "hash"
+  mapM filterClick ["all", "active", "completed"]
+  where
+    filterClick f = select ("a#filter-" ++ f) >>= click (moveTo stateRef) def
 
 updateTodos :: IORef State -> IO ()
 updateTodos stateRef = do
   l <- todoList stateRef
   s <- select "#todo-list"
   replaceWith l s
-  buts <- select "button.destroy"
-  click (destroy stateRef) def buts
-  togs <- select "input.toggle"
-  click (toggle stateRef) def togs
+  select "button.destroy" >>= click (destroy stateRef) def
+  select "input.toggle" >>= click (toggle stateRef) def
   select "#todo-list label" >>= click (beginEdit stateRef) def
   return ()
 
 destroy stateRef e = do
   x <- target e >>= selectElement
   a <- getAttr "n" x
-  let mn = readMay a
-  case mn of
+  case readMay a of
     Nothing -> return ()
     Just n -> do
       atomicModifyIORef stateRef $ app1Ref todoDestroy n
@@ -69,13 +62,17 @@ destroy stateRef e = do
       updateBindings stateRef
 
 toggle stateRef e = do
-  xs <- target e >>= selectElement >>= getAttr "n"
-  let mx = readMay xs
-  case mx of
+  x <- target e >>= selectElement
+  a <- getAttr "n" x
+  case readMay a of
     Nothing -> return ()
     Just n -> do
       atomicModifyIORef stateRef $ app1Ref todoToggle n
-      updateTodos stateRef -- XXX shouldn't replace complete list
+      p <- parent x
+      h <- hasClass "completed" p
+      -- wot no toggleClass?
+      if h then removeClass "completed" p
+           else addClass "completed" p
       updateBindings stateRef
 
 toggleAll stateRef e = do
@@ -89,8 +86,6 @@ moveTo stateRef e = do
   case stripPrefix "filter-" x of
     Nothing -> return ()
     Just f -> do
-      myThing <- select $ "<div>moveTo called: " ++ tshow f ++ "</div>"
-      select "body" >>= appendJQuery myThing
       State o _ <- readIORef stateRef
       select ("a#filter-" ++ o) >>= removeClass "selected"
       atomicModifyIORef stateRef $ \(State _ ts) -> (State f ts,())
@@ -103,8 +98,6 @@ create stateRef e = do
     i <- select "input#new-todo"
     v <- getVal i
     setVal "" i
-    myThing <- select $ "<div>create called: " ++ tshow v ++ "</div>"
-    select "body" >>= appendJQuery myThing
     atomicModifyIORef stateRef $ app1Ref todoCreate v
     updateTodos stateRef
     updateBindings stateRef
@@ -180,8 +173,9 @@ todoUpdate n t ts =
 
 updateBindings stateRef = do
   State f ts <- readIORef stateRef
-  myThing <- select $ "<div>" ++ tshow f ++ "</div>"
-  select "body" >>= appendJQuery myThing
+  -- handy for debugging
+  -- myThing <- select $ "<div>" ++ tshow f ++ "</div>"
+  -- select "body" >>= appendJQuery myThing
   let nDone = L.length $ L.filter (\(_, _, c) -> c) ts
       nLeft = L.length ts - nDone
       pLeft = (if nLeft == 1 then "item" else "items") ++ " left"
