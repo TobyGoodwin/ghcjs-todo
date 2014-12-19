@@ -52,25 +52,26 @@ stateChange stateRef f = do
 
 pageChange :: State -> State -> IO ()
 pageChange (State oldf oldts) (State newf newts) = do
-  listChange (sort oldts) (sort newts)
+  listChange (prep oldf oldts) (prep newf newts)
+  where
+    prep f = sort . filter (todoFilter f)
 
 listChange :: [Todo] -> [Todo] -> IO ()
 listChange [] [] = return ()
 listChange [] (n:ns) = do
-  -- do something with n
+  listAppend n
   listChange [] ns
 listChange (o:os) [] = do
   listDelete o
   listChange os []
 listChange old@(o:os) new@(n:ns) =
   case o `compare` n of
-    EQ -> return ()
+    EQ -> listChange os ns
     LT -> do
-      -- delete o
       listDelete o
       listChange os new
     GT -> do
-      -- insert n
+      listInsert n o
       listChange old ns
 
 listDelete (i, t, c) = do
@@ -78,6 +79,27 @@ listDelete (i, t, c) = do
   select "body" >>= appendJQuery myThing
   select ("#todo-list li[n='" ++ tshow i ++ "']") >>= detach
 
+listAppend item = do
+  myThing <- select $ "<div>will append " ++ tshow item ++ "</div>"
+  select "body" >>= appendJQuery myThing
+  x <- select $ listItem item
+  select "#todo-list" >>= appendJQuery x
+
+listInsert item (b, _, _)= do
+  myThing <- select $ "<div>will insert " ++ tshow item ++ " before " ++ tshow b ++ "</div>"
+  select "body" >>= appendJQuery myThing
+  let x = listItem item
+  select ("#todo-list li[n='" ++ tshow b ++ "']") >>= before x
+
+listItem (i, t, c) =
+  T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
+    <li :c:.completed n=#{i}>
+      <input .toggle n=#{i} type=checkbox :c:checked>
+      <label>
+        #{t}
+      <button .destroy n=#{i}>
+  |]
+  
 initClicks stateRef = do
   select "input#new-todo" >>= J.on (create stateRef) "keyup" def
   -- select "button#clear-completed" >>= click (clearCompleted stateRef) def
@@ -86,7 +108,9 @@ initClicks stateRef = do
   select "input#toggle-all" >>= click (toggleAll stateRef) def
   mapM filterClick ["all", "active", "completed"]
   where
-    filterClick f = select ("a#filter-" ++ f) >>= click (moveTo stateRef) def
+    --filterClick f = select ("a#filter-" ++ f) >>= click (moveTo stateRef) def
+    filterClick f = select ("a#filter-" ++ f) >>=
+                      click (eventHandle stateRef (moveTo' f) id) def
 
 clearCompleted stateRef e = do
   atomicModifyIORef stateRef $ app0Ref todoClear
@@ -98,6 +122,30 @@ todoClear = filter (\(_, _, c) -> not c)
 
 todoClear' :: State -> State
 todoClear' (State f ts) = State f $ filter (not . status) ts
+
+moveTo stateRef e = do
+  x <- target e >>= selectElement >>= getAttr "id"
+  case stripPrefix "filter-" x of
+    Nothing -> return ()
+    Just f -> do
+      State o _ <- readIORef stateRef
+      select ("a#filter-" ++ o) >>= removeClass "selected"
+      atomicModifyIORef stateRef $ \(State _ ts) -> (State f ts,())
+      updateTodos stateRef
+      updateBindings stateRef
+
+moveTo' :: Text -> State -> State
+moveTo' f (State _ ts) = State f ts
+
+create stateRef e = do
+  k <- which e
+  when (chr k == '\r') $ do
+    i <- select "input#new-todo"
+    v <- getVal i
+    setVal "" i
+    atomicModifyIORef stateRef $ app1Ref todoCreate v
+    updateTodos stateRef
+    updateBindings stateRef
 
 updateTodos :: IORef State -> IO ()
 updateTodos stateRef = do
@@ -138,27 +186,6 @@ toggleAll stateRef e = do
   atomicModifyIORef stateRef $ app0Ref (if x then todoAllSet else todoAllReset)
   updateTodos stateRef -- XXX shouldn't replace complete list
   updateBindings stateRef
-
-moveTo stateRef e = do
-  x <- target e >>= selectElement >>= getAttr "id"
-  case stripPrefix "filter-" x of
-    Nothing -> return ()
-    Just f -> do
-      State o _ <- readIORef stateRef
-      select ("a#filter-" ++ o) >>= removeClass "selected"
-      atomicModifyIORef stateRef $ \(State _ ts) -> (State f ts,())
-      updateTodos stateRef
-      updateBindings stateRef
-  
-create stateRef e = do
-  k <- which e
-  when (chr k == '\r') $ do
-    i <- select "input#new-todo"
-    v <- getVal i
-    setVal "" i
-    atomicModifyIORef stateRef $ app1Ref todoCreate v
-    updateTodos stateRef
-    updateBindings stateRef
 
 beginEdit stateRef e = do
   x <- target e >>= selectElement
