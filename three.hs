@@ -33,13 +33,71 @@ main = do
   updateBindings stateRef
   initClicks stateRef
 
+eventHandle stateRef stateFn otherFn e = do
+  stateChange stateRef stateFn
+  let x = otherFn ()
+  return ()
+
+stateChange :: IORef State -> (State -> State) -> IO ()
+stateChange stateRef f = do
+  (old, new) <- atomicModifyIORef stateRef f'
+  myThing <- select $ "<div>old is: " ++ tshow old ++ "</div>"
+  select "body" >>= appendJQuery myThing
+  myThing <- select $ "<div>new is: " ++ tshow new ++ "</div>"
+  select "body" >>= appendJQuery myThing
+  pageChange old new
+  return ()
+  where
+    f' o = let n = f o in (n, (o, n))
+
+pageChange :: State -> State -> IO ()
+pageChange (State oldf oldts) (State newf newts) = do
+  listChange (sort oldts) (sort newts)
+
+listChange :: [Todo] -> [Todo] -> IO ()
+listChange [] [] = return ()
+listChange [] (n:ns) = do
+  -- do something with n
+  listChange [] ns
+listChange (o:os) [] = do
+  listDelete o
+  listChange os []
+listChange old@(o:os) new@(n:ns) =
+  case o `compare` n of
+    EQ -> return ()
+    LT -> do
+      -- delete o
+      listDelete o
+      listChange os new
+    GT -> do
+      -- insert n
+      listChange old ns
+
+listDelete (i, t, c) = do
+  myThing <- select $ "<div>will delete " ++ tshow i ++ "</div>"
+  select "body" >>= appendJQuery myThing
+  select ("#todo-list li[n='" ++ tshow i ++ "']") >>= detach
+
 initClicks stateRef = do
   select "input#new-todo" >>= J.on (create stateRef) "keyup" def
-  select "button#clear-completed" >>= click (clearCompleted stateRef) def
+  -- select "button#clear-completed" >>= click (clearCompleted stateRef) def
+  select "button#clear-completed" >>=
+    click (eventHandle stateRef todoClear' id) def
   select "input#toggle-all" >>= click (toggleAll stateRef) def
   mapM filterClick ["all", "active", "completed"]
   where
     filterClick f = select ("a#filter-" ++ f) >>= click (moveTo stateRef) def
+
+clearCompleted stateRef e = do
+  atomicModifyIORef stateRef $ app0Ref todoClear
+  updateTodos stateRef
+  updateBindings stateRef
+
+todoClear :: [Todo] -> [Todo]
+todoClear = filter (\(_, _, c) -> not c)
+
+todoClear' :: State -> State
+todoClear' (State f ts) = State f $ filter (not . status) ts
 
 updateTodos :: IORef State -> IO ()
 updateTodos stateRef = do
@@ -130,11 +188,6 @@ acceptEdit stateRef n e = do
   atomicModifyIORef stateRef $ app2Ref todoUpdate n v
   updateTodos stateRef
 
-clearCompleted stateRef e = do
-  atomicModifyIORef stateRef $ app0Ref todoClear
-  updateTodos stateRef
-  updateBindings stateRef
-
 app0Ref f (State a ts) = (State a (f ts), ())
 app1Ref f p (State a ts) = (State a (f p ts), ())
 app2Ref f p q (State a ts) = (State a (f p q ts), ())
@@ -144,9 +197,6 @@ todoAllSet = map (\(i, t, _) -> (i, t, True))
 
 todoAllReset :: [Todo] -> [Todo]
 todoAllReset = map (\(i, t, _) -> (i, t, False))
-
-todoClear :: [Todo] -> [Todo]
-todoClear = filter (\(_, _, c) -> not c)
 
 todoCreate :: Text -> [Todo] -> [Todo]
 todoCreate t ts =
@@ -206,6 +256,7 @@ type Todo = (Int, Text, Bool)
 type FilterName = Text
 type Filter = Todo -> Bool
 data State = State FilterName [Todo]
+  deriving Show
 
 initialTodos :: [Todo]
 initialTodos =

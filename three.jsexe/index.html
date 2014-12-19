@@ -8,7 +8,6 @@
     <script language="javascript" src="rts.js"></script>
     <script language="javascript" src="lib1.js"></script>
     <script language="javascript" src="out.js"></script>
-    <script language="javascript" src="jquery-1.11.1.js"></script>
   </head>
   <body>
     <section id="todoapp">
@@ -53,23 +52,6 @@
       <p>Double-click to edit a todo</p>
     </footer>
   <script language="javascript">
-    function delete_helper(i) {
-      console.log(i);
-      // var action = h$c3(h$ap2_e, h$mainZCMainzithing, i, i);
-      // h$run(action);
-      var action = h$c2(h$ap1_e, h$mainZCMainzithing2, i);
-      h$run(action);
-      //h$run(h$mainZCMainzithing);
-    }
-
-function h$jquery_makeListener(callback, stopProp, stopImmProp, preventDefault) {
-return function(e) {
-if(stopProp) e.stopPropagation();
-if(stopImmProp) e.stopImmediatePropagation();
-if(preventDefault) e.preventDefault();
-callback(e);
-}
-}
     h$main(h$mainZCMainzimain);
   </script>
   </body>
