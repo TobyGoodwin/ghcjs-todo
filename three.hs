@@ -126,9 +126,17 @@ todoChange (Todo i ot oc oe) n@(Todo _ nt nc ne) = do
   when (oc /= nc) $ do
     -- wot no toggleClass?
     h <- hasClass "completed" x
-    if h then removeClass "completed" x >> return ()
-         else addClass "completed" x >> return ()
+    if h then do
+           removeClass "completed" x >>= 
+             J.find "input.toggle" >>= removeProp "checked"
+           return ()
+         else do
+           addClass "completed" x >>=
+             J.find "input.toggle" >>= setProp "checked" "true"
+           return ()
   when (oe /= ne) $ do
+    myThing <- select $ "<div>doing editing change</div>"
+    select "body" >>= appendJQuery myThing
     let i = listItem n
     replaceWith i x >> return ()
   return ()
@@ -140,13 +148,20 @@ initClicks stateRef = do
   select "button#clear-completed" >>= doClick eventNull todoClear
   select "input#toggle-all" >>= doClick eventChecked toggleAll
   mapM filterClick ["all", "active", "completed"]
-  select "ul#todo-list button.destroy" >>= doClick eventTodoIndex destroy
-  select "ul#todo-list input.toggle" >>= doClick eventTodoIndex toggle
-  select "ul#todo-list label" >>=
-    dblclick (eventHandle stateRef eventTodoIndex editing) def
-  s <- select "ul#todo-list li.editing"
-  J.on (eventHandle stateRef eventIndexText acceptEdit) "focusout" def s
-  J.on (eventHandle stateRef eventKey keyEdit) "keyup" def s
+  s <- select "ul#todo-list"
+  doOn "click" "button.destroy" eventTodoIndex destroy s
+  doOn "click" "input.toggle" eventTodoIndex toggle s
+  -- doOn "click" "label" eventTodoIndex editing s
+  J.on (eventHandle stateRef eventTodoIndex editing) "click" def { hsDescendantFilter = Just "label" } s
+  -- select "ul#todo-list button.destroy" >>= doClick eventTodoIndex destroy
+  -- select "ul#todo-list input.toggle" >>= doClick eventTodoIndex toggle
+  -- select "ul#todo-list label" >>=
+  --   dblclick (eventHandle stateRef eventTodoIndex editing) def
+  -- s <- select "ul#todo-list"
+  doOn "focusout" "li.editing" eventIndexText acceptEdit s
+  doOn "keyup" "li.editing" eventKey keyEdit s
+  -- J.on (eventHandle stateRef eventIndexText acceptEdit) "focusout" def s
+  -- J.on (eventHandle stateRef eventKey keyEdit) "keyup" def s
   return ()
   where
     -- currently handing f straight to the State changer - would it make more
@@ -154,6 +169,8 @@ initClicks stateRef = do
     filterClick f = select ("a#filter-" ++ f) >>=
                       doClick eventNull (moveTo f)
     doClick ef sf = click (eventHandle stateRef ef sf) def
+    doOn evt desc ef sf =
+      J.on (eventHandle stateRef ef sf) evt def { hsDescendantFilter = Just desc }
 
 eventNull _ = return ()
 eventTodoIndex e = do
@@ -205,7 +222,7 @@ toggle (Just n) s =
 
 editing :: Maybe Int -> State -> State
 -- editing mi s = s { stateEditing = mi }
-editing mi = stateTodosChange mi (\x -> x { todoEditing = True })
+editing mi = stateTodosChange mi (\x -> x { todoText = "htueau" })
 
 toggleAll :: Bool -> State -> State
 toggleAll x s = s { stateTodos = map setStatus (stateTodos s) }
@@ -213,10 +230,12 @@ toggleAll x s = s { stateTodos = map setStatus (stateTodos s) }
     setStatus t = t { todoStatus = x }
 
 keyEnter = 13 :: Int
+keyEscape = 13 :: Int
 
 create :: (Int, Text) -> State -> State
 create (k, todo) s
   | k == keyEnter = s { stateTodos = newt : ts, stateEditing = False }
+  | k == keyEscape = s { stateEditing = False }
   | otherwise = s { stateEditing = True }
   where
     ts = stateTodos s
