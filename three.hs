@@ -28,13 +28,13 @@ foreign import javascript safe   "window.location.hash = $1;"
 main = do
   h <- T.pack . fromJSString <$> windowLocationHash
   let f = if T.null h then "all" else T.drop 1 h
-  -- stateRef <- newIORef (State f initialTodos)
   stateRef <- newIORef (State "" [])
   stateChange stateRef (const (State f initialTodos))
-  -- updateTodos stateRef
   updateBindings stateRef
   initClicks stateRef
 
+-- wildly generic event handler. call eventFn to munge the event in some way,
+-- making the result of that available to stateFn, a pure State changer
 eventHandle :: IORef State -> (Event -> IO a) -> (a -> State -> State) ->
                 Event -> IO ()
 eventHandle stateRef eventFn stateFn e = do
@@ -111,67 +111,47 @@ listItem (i, t, c) =
 initClicks :: IORef State -> IO ()
 initClicks stateRef = do
   select "input#new-todo" >>= J.on (create stateRef) "keyup" def
-  -- select "button#clear-completed" >>= click (clearCompleted stateRef) def
-  select "button#clear-completed" >>=
-    click (eventHandle stateRef eventNull todoClear') def
-  select "input#toggle-all" >>= click (toggleAll stateRef) def
+  select "button#clear-completed" >>= doClick eventNull todoClear
+  select "input#toggle-all" >>= doClick eventChecked toggleAll'
   mapM filterClick ["all", "active", "completed"]
-  select "ul#todo-list button.destroy" >>=
-    click (eventHandle stateRef eventTodoIndex destroy') def
+  select "ul#todo-list button.destroy" >>= doClick eventTodoIndex destroy
   select "ul#todo-list input.toggle" >>= click (toggle stateRef) def
   select "ul#todo-list label" >>= click (beginEdit stateRef) def
   return ()
   where
-    --filterClick f = select ("a#filter-" ++ f) >>= click (moveTo stateRef) def
+    -- currently handing f straight to the State changer - would it make more
+    -- sense to provide an eventFn that can extract it?
     filterClick f = select ("a#filter-" ++ f) >>=
-                      click (eventHandle stateRef eventNull (moveTo' f)) def
+                      doClick eventNull (moveTo f)
+    doClick ef sf = click (eventHandle stateRef ef sf) def
 
 eventNull _ = return ()
 eventTodoIndex e = do
   a <- target e >>= selectElement >>= getAttr "n"
   return $ readMay a
+eventChecked e = target e >>= selectElement >>= is ":checked"
 
-clearCompleted stateRef e = do
-  atomicModifyIORef stateRef $ app0Ref todoClear
-  updateTodos stateRef
-  updateBindings stateRef
+todoClear :: () -> State -> State
+todoClear _ (State f ts) = State f $ filter (not . status) ts
 
-todoClear :: [Todo] -> [Todo]
-todoClear = filter (\(_, _, c) -> not c)
+moveTo :: Text -> () -> State -> State
+moveTo f _ (State _ ts) = State f ts
 
-todoClear' :: () -> State -> State
-todoClear' _ (State f ts) = State f $ filter (not . status) ts
-
-moveTo stateRef e = do
-  x <- target e >>= selectElement >>= getAttr "id"
-  case stripPrefix "filter-" x of
-    Nothing -> return ()
-    Just f -> do
-      State o _ <- readIORef stateRef
-      select ("a#filter-" ++ o) >>= removeClass "selected"
-      atomicModifyIORef stateRef $ \(State _ ts) -> (State f ts,())
-      updateTodos stateRef
-      updateBindings stateRef
-
-moveTo' :: Text -> () -> State -> State
-moveTo' f _ (State _ ts) = State f ts
-
-destroy stateRef e = do
-  x <- target e >>= selectElement
-  a <- getAttr "n" x
-  case readMay a of
-    Nothing -> return ()
-    Just n -> do
-      atomicModifyIORef stateRef $ app1Ref todoDestroy n
-      parent x >>= detach
-      updateBindings stateRef
-
-destroy' :: Maybe Int -> State -> State
-destroy' Nothing s = s
-destroy' (Just n) s@(State f ts) = do
+destroy :: Maybe Int -> State -> State
+destroy Nothing s = s
+destroy (Just n) s@(State f ts) = do
   case find (\(i, _, _) -> i == n) ts of
     Nothing -> s
     Just t -> State f (L.delete t ts)
+
+toggleAll stateRef e = do
+  x <- target e >>= selectElement >>= is ":checked"
+  atomicModifyIORef stateRef $ app0Ref (if x then todoAllSet else todoAllReset)
+  updateTodos stateRef -- XXX shouldn't replace complete list
+  updateBindings stateRef
+
+toggleAll' :: Bool -> State -> State
+toggleAll' x (State f ts) = State f (map (\(i, t, _) -> (i, t, x)) ts)
 
 create stateRef e = do
   k <- which e
@@ -185,13 +165,17 @@ create stateRef e = do
 
 updateTodos :: IORef State -> IO ()
 updateTodos stateRef = do
+  myThing <- select $ "<div>updateTodos called!</div>"
+  select "body" >>= appendJQuery myThing
+  return ()
+  {-
   l <- todoList stateRef
   s <- select "#todo-list"
   replaceWith l s
   select "button.destroy" >>= click (destroy stateRef) def
   select "input.toggle" >>= click (toggle stateRef) def
   select "#todo-list label" >>= click (beginEdit stateRef) def
-  return ()
+  return () -}
 
 toggle stateRef e = do
   x <- target e >>= selectElement
@@ -206,12 +190,6 @@ toggle stateRef e = do
       if h then removeClass "completed" p
            else addClass "completed" p
       updateBindings stateRef
-
-toggleAll stateRef e = do
-  x <- target e >>= selectElement >>= is ":checked"
-  atomicModifyIORef stateRef $ app0Ref (if x then todoAllSet else todoAllReset)
-  updateTodos stateRef -- XXX shouldn't replace complete list
-  updateBindings stateRef
 
 beginEdit stateRef e = do
   x <- target e >>= selectElement
@@ -305,6 +283,7 @@ todoList stateRef = do
           <button .destroy n=#{i}>
   |]
 
+-- XXX State and Todo would probably both work better as record types
 type Todo = (Int, Text, Bool)
 type FilterName = Text
 type Filter = Todo -> Bool
