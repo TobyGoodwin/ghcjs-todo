@@ -41,6 +41,8 @@ main = do
 eventHandle :: IORef State -> (Event -> IO a) -> (a -> State -> State) ->
                 Event -> IO ()
 eventHandle stateRef eventFn stateFn e = do
+  myThing <- select $ "<div>eventhandle</div>"
+  select "body" >>= appendJQuery myThing
   x <- eventFn e
   stateChange stateRef (stateFn x)
   return ()
@@ -53,9 +55,17 @@ stateChange stateRef f = do
   myThing <- select $ "<div>new is: " ++ tshow new ++ "</div>"
   select "body" >>= appendJQuery myThing
   pageChange old new
+  -- select "#todo-list" >>= J.on checkedit "click" def { hsDescendantFilter = Just "label" }
   return ()
   where
     f' o = let n = f o in (n, (o, n))
+
+checkedit _ = do
+  myThing <- select $ "<div>checkedit</div>"
+  select "body" >>= appendJQuery myThing
+  return ()
+
+checkedit2 () s = s
 
 pageChange :: State -> State -> IO ()
 pageChange (State oldf oldts olded) (State newf newts newed) = do
@@ -91,19 +101,19 @@ listChange old@(o:os) new@(n:ns) =
       listChange old ns
 
 listDelete t = do
-  myThing <- select $ "<div>will delete " ++ tshow (todoId t) ++ "</div>"
-  select "body" >>= appendJQuery myThing
+  -- myThing <- select $ "<div>will delete " ++ tshow (todoId t) ++ "</div>"
+  -- select "body" >>= appendJQuery myThing
   select ("#todo-list li[n='" ++ tshow (todoId t) ++ "']") >>= detach
 
 listAppend item = do
-  myThing <- select $ "<div>will append " ++ tshow item ++ "</div>"
-  select "body" >>= appendJQuery myThing
+  -- myThing <- select $ "<div>will append " ++ tshow item ++ "</div>"
+  -- select "body" >>= appendJQuery myThing
   x <- select $ listItem item
   select "#todo-list" >>= appendJQuery x
 
 listInsert item b = do
-  myThing <- select $ "<div>will insert " ++ tshow item ++ " before " ++ tshow b ++ "</div>"
-  select "body" >>= appendJQuery myThing
+  -- myThing <- select $ "<div>will insert " ++ tshow item ++ " before " ++ tshow b ++ "</div>"
+  -- select "body" >>= appendJQuery myThing
   let x = listItem item
   select ("#todo-list li[n='" ++ tshow (todoId b) ++ "']") >>= before x
 
@@ -138,7 +148,8 @@ todoChange (Todo i ot oc oe) n@(Todo _ nt nc ne) = do
     myThing <- select $ "<div>doing editing change</div>"
     select "body" >>= appendJQuery myThing
     let i = listItem n
-    replaceWith i x >> return ()
+    replaceWith i x
+    when ne $ select "#todo-list li.editing input" >>= focus >> return ()
   return ()
   
 initClicks :: IORef State -> IO ()
@@ -150,9 +161,15 @@ initClicks stateRef = do
   mapM filterClick ["all", "active", "completed"]
   s <- select "ul#todo-list"
   doOn "click" "button.destroy" eventTodoIndex destroy s
-  doOn "click" "input.toggle" eventTodoIndex toggle s
+  -- doOn "click" "input.toggle" eventTodoIndex toggle s
   -- doOn "click" "label" eventTodoIndex editing s
-  J.on (eventHandle stateRef eventTodoIndex editing) "click" def { hsDescendantFilter = Just "label" } s
+  -- J.on (eventHandle stateRef eventTodoIndex editing) "click" def { hsDescendantFilter = Just "label" } s
+  -- works: select "ul#todo-list" >>= J.on checkedit "click" def { hsDescendantFilter = Just "label" }
+  -- works: J.on checkedit "click" def { hsDescendantFilter = Just "label" } s
+  -- works J.on checkedit "click" def { hsDescendantFilter = Just "label" } s
+  -- works J.on (eventHandle stateRef eventNull checkedit2) "click" def { hsDescendantFilter = Just "label" } s
+  -- works doOn "click" "label" eventNull checkedit2 s
+  doOn "click" "label" eventTodoIndex' editing s
   -- select "ul#todo-list button.destroy" >>= doClick eventTodoIndex destroy
   -- select "ul#todo-list input.toggle" >>= doClick eventTodoIndex toggle
   -- select "ul#todo-list label" >>=
@@ -175,6 +192,9 @@ initClicks stateRef = do
 eventNull _ = return ()
 eventTodoIndex e = do
   a <- target e >>= selectElement >>= getAttr "n"
+  return $ readMay a
+eventTodoIndex' e = do
+  a <- target e >>= selectElement >>= parent >>= getAttr "n"
   return $ readMay a
 eventChecked e = target e >>= selectElement >>= is ":checked"
 eventKey e = do
@@ -222,7 +242,8 @@ toggle (Just n) s =
 
 editing :: Maybe Int -> State -> State
 -- editing mi s = s { stateEditing = mi }
-editing mi = stateTodosChange mi (\x -> x { todoText = "htueau" })
+editing mi = stateTodosChange mi (\x -> x { todoEditing = True })
+-- editing mi s = s { stateTodos = [] }
 
 toggleAll :: Bool -> State -> State
 toggleAll x s = s { stateTodos = map setStatus (stateTodos s) }
@@ -230,7 +251,7 @@ toggleAll x s = s { stateTodos = map setStatus (stateTodos s) }
     setStatus t = t { todoStatus = x }
 
 keyEnter = 13 :: Int
-keyEscape = 13 :: Int
+keyEscape = 27 :: Int
 
 create :: (Int, Text) -> State -> State
 create (k, todo) s
