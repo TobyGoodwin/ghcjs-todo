@@ -28,14 +28,18 @@ foreign import javascript safe   "window.location.hash = $1;"
 main = do
   h <- T.pack . fromJSString <$> windowLocationHash
   let f = if T.null h then "all" else T.drop 1 h
-  stateRef <- newIORef (State f initialTodos)
-  updateTodos stateRef
+  -- stateRef <- newIORef (State f initialTodos)
+  stateRef <- newIORef (State "" [])
+  stateChange stateRef (const (State f initialTodos))
+  -- updateTodos stateRef
   updateBindings stateRef
   initClicks stateRef
 
-eventHandle stateRef stateFn otherFn e = do
-  stateChange stateRef stateFn
-  let x = otherFn ()
+eventHandle :: IORef State -> (Event -> IO a) -> (a -> State -> State) ->
+                Event -> IO ()
+eventHandle stateRef eventFn stateFn e = do
+  x <- eventFn e
+  stateChange stateRef (stateFn x)
   return ()
 
 stateChange :: IORef State -> (State -> State) -> IO ()
@@ -56,6 +60,10 @@ pageChange (State oldf oldts) (State newf newts) = do
   where
     prep f = sort . filter (todoFilter f)
 
+-- if we abstracted listChange (perhaps have a listChanger record type that
+-- holds the functions for delete, append, etc) we could call it twice, once to
+-- change the actual list, and again to manipulate "hidden" class attributes.
+-- that would mean even less DOM perturbation
 listChange :: [Todo] -> [Todo] -> IO ()
 listChange [] [] = return ()
 listChange [] (n:ns) = do
@@ -100,17 +108,28 @@ listItem (i, t, c) =
       <button .destroy n=#{i}>
   |]
   
+initClicks :: IORef State -> IO ()
 initClicks stateRef = do
   select "input#new-todo" >>= J.on (create stateRef) "keyup" def
   -- select "button#clear-completed" >>= click (clearCompleted stateRef) def
   select "button#clear-completed" >>=
-    click (eventHandle stateRef todoClear' id) def
+    click (eventHandle stateRef eventNull todoClear') def
   select "input#toggle-all" >>= click (toggleAll stateRef) def
   mapM filterClick ["all", "active", "completed"]
+  select "ul#todo-list button.destroy" >>=
+    click (eventHandle stateRef eventTodoIndex destroy') def
+  select "ul#todo-list input.toggle" >>= click (toggle stateRef) def
+  select "ul#todo-list label" >>= click (beginEdit stateRef) def
+  return ()
   where
     --filterClick f = select ("a#filter-" ++ f) >>= click (moveTo stateRef) def
     filterClick f = select ("a#filter-" ++ f) >>=
-                      click (eventHandle stateRef (moveTo' f) id) def
+                      click (eventHandle stateRef eventNull (moveTo' f)) def
+
+eventNull _ = return ()
+eventTodoIndex e = do
+  a <- target e >>= selectElement >>= getAttr "n"
+  return $ readMay a
 
 clearCompleted stateRef e = do
   atomicModifyIORef stateRef $ app0Ref todoClear
@@ -120,8 +139,8 @@ clearCompleted stateRef e = do
 todoClear :: [Todo] -> [Todo]
 todoClear = filter (\(_, _, c) -> not c)
 
-todoClear' :: State -> State
-todoClear' (State f ts) = State f $ filter (not . status) ts
+todoClear' :: () -> State -> State
+todoClear' _ (State f ts) = State f $ filter (not . status) ts
 
 moveTo stateRef e = do
   x <- target e >>= selectElement >>= getAttr "id"
@@ -134,8 +153,25 @@ moveTo stateRef e = do
       updateTodos stateRef
       updateBindings stateRef
 
-moveTo' :: Text -> State -> State
-moveTo' f (State _ ts) = State f ts
+moveTo' :: Text -> () -> State -> State
+moveTo' f _ (State _ ts) = State f ts
+
+destroy stateRef e = do
+  x <- target e >>= selectElement
+  a <- getAttr "n" x
+  case readMay a of
+    Nothing -> return ()
+    Just n -> do
+      atomicModifyIORef stateRef $ app1Ref todoDestroy n
+      parent x >>= detach
+      updateBindings stateRef
+
+destroy' :: Maybe Int -> State -> State
+destroy' Nothing s = s
+destroy' (Just n) s@(State f ts) = do
+  case find (\(i, _, _) -> i == n) ts of
+    Nothing -> s
+    Just t -> State f (L.delete t ts)
 
 create stateRef e = do
   k <- which e
@@ -156,16 +192,6 @@ updateTodos stateRef = do
   select "input.toggle" >>= click (toggle stateRef) def
   select "#todo-list label" >>= click (beginEdit stateRef) def
   return ()
-
-destroy stateRef e = do
-  x <- target e >>= selectElement
-  a <- getAttr "n" x
-  case readMay a of
-    Nothing -> return ()
-    Just n -> do
-      atomicModifyIORef stateRef $ app1Ref todoDestroy n
-      parent x >>= detach
-      updateBindings stateRef
 
 toggle stateRef e = do
   x <- target e >>= selectElement
