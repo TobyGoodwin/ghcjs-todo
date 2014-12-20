@@ -15,7 +15,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as LT
 import GHCJS.Prim (fromJSString, toJSString)
 import GHCJS.Types (JSString)
-import JavaScript.JQuery hiding (filter, find, not)
+import JavaScript.JQuery hiding (filter, find, not, on)
 import qualified JavaScript.JQuery as J
 import Text.Blaze.Html.Renderer.Text (renderHtml)
 import Text.Hamlet (shamlet)
@@ -58,7 +58,7 @@ pageChange :: State -> State -> IO ()
 pageChange (State oldf oldts) (State newf newts) = do
   listChange (prep oldf oldts) (prep newf newts)
   where
-    prep f = sort . filter (todoFilter f)
+    prep f = sortBy (compare `on` todoId) . filter (todoFilter f)
 
 -- if we abstracted listChange (perhaps have a listChanger record type that
 -- holds the functions for delete, append, etc) we could call it twice, once to
@@ -73,8 +73,10 @@ listChange (o:os) [] = do
   listDelete o
   listChange os []
 listChange old@(o:os) new@(n:ns) =
-  case o `compare` n of
-    EQ -> listChange os ns
+  case (compare `on` todoId) o n of
+    EQ -> do
+      when (o /= n) $ todoChange o n
+      listChange os ns
     LT -> do
       listDelete o
       listChange os new
@@ -82,10 +84,10 @@ listChange old@(o:os) new@(n:ns) =
       listInsert n o
       listChange old ns
 
-listDelete (i, t, c) = do
-  myThing <- select $ "<div>will delete " ++ tshow i ++ "</div>"
+listDelete t = do
+  myThing <- select $ "<div>will delete " ++ tshow (todoId t) ++ "</div>"
   select "body" >>= appendJQuery myThing
-  select ("#todo-list li[n='" ++ tshow i ++ "']") >>= detach
+  select ("#todo-list li[n='" ++ tshow (todoId t) ++ "']") >>= detach
 
 listAppend item = do
   myThing <- select $ "<div>will append " ++ tshow item ++ "</div>"
@@ -93,13 +95,13 @@ listAppend item = do
   x <- select $ listItem item
   select "#todo-list" >>= appendJQuery x
 
-listInsert item (b, _, _)= do
+listInsert item b = do
   myThing <- select $ "<div>will insert " ++ tshow item ++ " before " ++ tshow b ++ "</div>"
   select "body" >>= appendJQuery myThing
   let x = listItem item
-  select ("#todo-list li[n='" ++ tshow b ++ "']") >>= before x
+  select ("#todo-list li[n='" ++ tshow (todoId b) ++ "']") >>= before x
 
-listItem (i, t, c) =
+listItem (Todo i t c e) =
   T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
     <li :c:.completed n=#{i}>
       <input .toggle n=#{i} type=checkbox :c:checked>
@@ -107,16 +109,28 @@ listItem (i, t, c) =
         #{t}
       <button .destroy n=#{i}>
   |]
+
+todoChange (Todo i ot oc oe) (Todo _ nt nc ne) = do
+  x <- select ("#todo-list li[n='" ++ tshow i ++ "']")
+  when (ot /= nt) $ setText nt x >> return ()
+  when (oc /= nc) $ do
+    -- wot no toggleClass?
+    h <- hasClass "completed" x
+    if h then removeClass "completed" x >> return ()
+         else addClass "completed" x >> return ()
+  return ()
   
 initClicks :: IORef State -> IO ()
 initClicks stateRef = do
-  select "input#new-todo" >>= J.on (create stateRef) "keyup" def
+  select "input#new-todo" >>=
+    J.on (eventHandle stateRef eventKey create) "keyup" def
   select "button#clear-completed" >>= doClick eventNull todoClear
-  select "input#toggle-all" >>= doClick eventChecked toggleAll'
+  select "input#toggle-all" >>= doClick eventChecked toggleAll
   mapM filterClick ["all", "active", "completed"]
   select "ul#todo-list button.destroy" >>= doClick eventTodoIndex destroy
-  select "ul#todo-list input.toggle" >>= click (toggle stateRef) def
-  select "ul#todo-list label" >>= click (beginEdit stateRef) def
+  select "ul#todo-list input.toggle" >>= doClick eventTodoIndex toggle
+  select "ul#todo-list label" >>=
+    dblclick (eventHandle stateRef eventTodoIndex editing) def
   return ()
   where
     -- currently handing f straight to the State changer - would it make more
@@ -130,29 +144,52 @@ eventTodoIndex e = do
   a <- target e >>= selectElement >>= getAttr "n"
   return $ readMay a
 eventChecked e = target e >>= selectElement >>= is ":checked"
+eventKey e = do
+  k <- which e
+  v <- target e >>= selectElement >>= getVal
+  return (k, v)
 
 todoClear :: () -> State -> State
-todoClear _ (State f ts) = State f $ filter (not . status) ts
+todoClear _ (State f ts) = State f $ filter (not . todoStatus) ts
 
 moveTo :: Text -> () -> State -> State
 moveTo f _ (State _ ts) = State f ts
 
 destroy :: Maybe Int -> State -> State
 destroy Nothing s = s
-destroy (Just n) s@(State f ts) = do
-  case find (\(i, _, _) -> i == n) ts of
+destroy (Just n) s@(State f ts) =
+  case find ((n ==) . todoId) ts of
     Nothing -> s
     Just t -> State f (L.delete t ts)
 
+toggle :: Maybe Int -> State -> State
+toggle Nothing s = s
+toggle (Just n) s@(State f ts) =
+  case find ((n ==). todoId) ts of
+    Nothing -> s
+    Just t -> State f (t { todoStatus = not (todoStatus t) } : L.delete t ts)
+
+editing :: Maybe Int -> State -> State
+editing Nothing s = s
+editing (Just n) s@(State f ts) =
+  case find ((n ==) . todoId) ts of
+    Nothing -> s
+    Just t -> State f (t { todoEditing = True } : L.delete t ts)
+
+{-
 toggleAll stateRef e = do
   x <- target e >>= selectElement >>= is ":checked"
   atomicModifyIORef stateRef $ app0Ref (if x then todoAllSet else todoAllReset)
   updateTodos stateRef -- XXX shouldn't replace complete list
   updateBindings stateRef
+  -}
 
-toggleAll' :: Bool -> State -> State
-toggleAll' x (State f ts) = State f (map (\(i, t, _) -> (i, t, x)) ts)
+toggleAll :: Bool -> State -> State
+toggleAll x (State f ts) = State f (map setStatus ts)
+  where
+    setStatus t = t { todoStatus = x }
 
+{-
 create stateRef e = do
   k <- which e
   when (chr k == '\r') $ do
@@ -162,6 +199,16 @@ create stateRef e = do
     atomicModifyIORef stateRef $ app1Ref todoCreate v
     updateTodos stateRef
     updateBindings stateRef
+    -}
+
+keyEnter = 13 :: Int
+
+create :: (Int, Text) -> State -> State
+create (k, todo) s@(State f ts)
+  | k == keyEnter = State f (Todo (m+1) todo False False : ts)
+  | otherwise = s
+  where
+    m = fromMaybe 0 (maximumMay $ map todoId ts)
 
 updateTodos :: IORef State -> IO ()
 updateTodos stateRef = do
@@ -177,6 +224,7 @@ updateTodos stateRef = do
   select "#todo-list label" >>= click (beginEdit stateRef) def
   return () -}
 
+{-
 toggle stateRef e = do
   x <- target e >>= selectElement
   a <- getAttr "n" x
@@ -190,7 +238,10 @@ toggle stateRef e = do
       if h then removeClass "completed" p
            else addClass "completed" p
       updateBindings stateRef
+-}
 
+{-
+beginEdit stateRef e = do
 beginEdit stateRef e = do
   x <- target e >>= selectElement
   p <- parent x
@@ -222,17 +273,19 @@ acceptEdit stateRef n e = do
 app0Ref f (State a ts) = (State a (f ts), ())
 app1Ref f p (State a ts) = (State a (f p ts), ())
 app2Ref f p q (State a ts) = (State a (f p q ts), ())
-
+-}
+{-
 todoAllSet :: [Todo] -> [Todo]
 todoAllSet = map (\(i, t, _) -> (i, t, True))
 
 todoAllReset :: [Todo] -> [Todo]
 todoAllReset = map (\(i, t, _) -> (i, t, False))
-
+-}
+{-
 todoCreate :: Text -> [Todo] -> [Todo]
 todoCreate t ts =
-  let n = fromMaybe 0 $ maximumMay $ map (\(x, _, _) -> x) ts
-  in (n+1, t, False) : ts
+  let n = fromMaybe 0 $ maximumMay $ map todoId ts
+  in Todo (n+1) t False : ts
 
 todoDestroy n ts =
   let mt = L.find (\(x,_,_) -> x == n) ts
@@ -248,16 +301,17 @@ todoToggle n ts =
 
 todoUpdate :: Int -> Text -> [Todo] -> [Todo]
 todoUpdate n t ts =
-  case find (\(x,_,_) -> x == n) ts of
+  case find (\x -> todoId x == n) ts of
     Nothing -> todoCreate t ts
-    Just todo@(i, _, c) -> (i, t, c) : L.delete todo ts
+    Just todo -> todo { todoText = t } : L.delete todo ts
+-}
 
 updateBindings stateRef = do
   State f ts <- readIORef stateRef
   -- handy for debugging
   -- myThing <- select $ "<div>" ++ tshow f ++ "</div>"
   -- select "body" >>= appendJQuery myThing
-  let nDone = L.length $ L.filter (\(_, _, c) -> c) ts
+  let nDone = L.length $ L.filter todoStatus ts
       nLeft = L.length ts - nDone
       pLeft = (if nLeft == 1 then "item" else "items") ++ " left"
   select "#bind-n-left" >>= setText (tshow nLeft)
@@ -269,22 +323,14 @@ updateBindings stateRef = do
     >>= if nLeft == 0 then setProp "checked" "true" else removeProp "checked"
   select ("a#filter-" ++ f) >>= addClass "selected"
   return ()
-  
-todoList stateRef = do
-  State f ts0 <- readIORef stateRef
-  let ts = sort $ filter (todoFilter f) ts0
-  return $ T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
-    <ul #todo-list>
-      $forall (i, t, c) <- ts
-        <li :c:.completed n=#{i}>
-          <input .toggle n=#{i} type=checkbox :c:checked>
-          <label>
-            #{t}
-          <button .destroy n=#{i}>
-  |]
 
 -- XXX State and Todo would probably both work better as record types
-type Todo = (Int, Text, Bool)
+data Todo = Todo { todoId :: Int
+                 , todoText :: Text
+                 , todoStatus :: Bool
+                 , todoEditing :: Bool
+                 } deriving (Eq, Show)
+
 type FilterName = Text
 type Filter = Todo -> Bool
 data State = State FilterName [Todo]
@@ -292,15 +338,12 @@ data State = State FilterName [Todo]
 
 initialTodos :: [Todo]
 initialTodos =
-  [ (3, "Steal underpants", True)
-  , (14, "???", False)
-  , (16, "Profit!", False)
+  [ Todo 3 "Steal underpants" True False
+  , Todo 14 "???" False False
+  , Todo 16 "Profit!" False False
   ]
 
-status :: Todo -> Bool
-status (_, _, c) = c
-
 todoFilter :: FilterName -> Filter
-todoFilter "active" = not . status
-todoFilter "completed" = status
+todoFilter "active" = not . todoStatus
+todoFilter "completed" = todoStatus
 todoFilter _ = const True
