@@ -78,7 +78,10 @@ pageChange (State oldf oldts olded) (State newf newts newed) = do
   where
     prep f = sortBy (compare `on` todoId) . filter (todoFilter f)
 
--- if we abstracted listChange (perhaps have a listChanger record type that
+--data ListChanger = ListChanger
+  --{ listAppend :: (a -> IO ()) 
+
+-- if we abstracted listChange (perhaps have a ListChanger record type that
 -- holds the functions for delete, append, etc) we could call it twice, once to
 -- change the actual list, and again to manipulate "hidden" class attributes.
 -- that would mean even less DOM perturbation
@@ -126,8 +129,8 @@ listItem (Todo i t c e) =
         <button .destroy>
   |]
 
-todoChange (Todo i ot oc oe) n@(Todo _ nt nc ne) = do
-  x <- select ("#todo-list li[n='" ++ tshow i ++ "']")
+todoChange o@(Todo i ot oc oe) n@(Todo _ nt nc ne) = do
+  x <- select (todoSelector o)
   when (ot /= nt) $ setText nt x >> return ()
   when (oc /= nc) $ do
     -- wot no toggleClass?
@@ -141,10 +144,8 @@ todoChange (Todo i ot oc oe) n@(Todo _ nt nc ne) = do
              J.find "input.toggle" >>= setProp "checked" "true"
            return ()
   when (oe /= ne) $ do
-    let it = listItem n
-    replaceWith it x
+    replaceWith (listItem n) x
     when ne $ select "#todo-list li.editing input" >>= focus >> return ()
-  return ()
   
 initClicks :: IORef State -> IO ()
 initClicks stateRef = do
@@ -172,27 +173,15 @@ initClicks stateRef = do
         def { hsDescendantFilter = Just desc }
 
 eventNull _ = return ()
-eventIndex e = do
-  a <- target e >>= selectElement >>= parent >>= getAttr "n"
-  return $ readMay a
+eventIndex e = readMay <$>
+  (target e >>= selectElement >>= parent >>= getAttr "n")
 eventChecked e = target e >>= selectElement >>= is ":checked"
 eventVal e = target e >>= selectElement >>= getVal
-eventValKey e = do
-  v <- eventVal e
-  k <- which e
-  return (v, k)
-eventValEnter e = do
-  v <- eventVal e
-  return (v, keyEnter)
-eventIndexTextKey e = do
-  i <- eventIndex e
-  (v, k) <- eventValKey e
-  return (i, v, k)
+eventValKey e = (,) <$> eventVal e <*> which e
 -- moving focus out of editing box is equivalent to hitting enter
-eventIndexTextEnter e = do
-  i <- eventIndex e
-  v <- target e >>= selectElement >>= getVal
-  return (i, v, keyEnter)
+eventValEnter e = (,) <$> eventVal e <*> pure keyEnter
+eventIndexTextKey e = (,,) <$> eventIndex e <*> eventVal e <*> which e
+eventIndexTextEnter e = (,,) <$> eventIndex e <*> eventVal e <*> pure keyEnter
 
 todoClear :: () -> State -> State
 todoClear _ s = s { stateTodos = filter (not . todoStatus) (stateTodos s) }
