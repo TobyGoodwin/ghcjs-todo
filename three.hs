@@ -57,29 +57,23 @@ stateChange stateRef f = do
   where
     f' o = let n = f o in (n, (o, n))
 
-checkedit _ = do
-  myThing <- select $ "<div>checkedit</div>"
-  select "body" >>= appendJQuery myThing
-  return ()
-
-checkedit2 () s = s
-
+-- in this implementation, we filter the lists before handing to listChange. an
+-- alternative would be to pass the filter function down to listChange, so it
+-- can simply hide non-visible items: this would result in less DOM
+-- perturbation
 pageChange :: State -> State -> IO ()
 pageChange (State oldf oldts olded) (State newf newts newed) = do
   listChange (prep oldf oldts) (prep newf newts)
   when (olded && not newed) $
     select "input#new-todo" >>= setVal "" >> return ()
   when (oldf /= newf) $ do
-    select ("a#filter-" ++ oldf) >>= removeClass "selected"
-    select ("a#filter-" ++ newf) >>= addClass "selected"
+    select (filterSelector oldf) >>= removeClass "selected"
+    select (filterSelector newf) >>= addClass "selected"
     return ()
   updateBindings oldts newts
   return ()
   where
     prep f = sortBy (compare `on` todoId) . filter (todoFilter f)
-
---data ListChanger = ListChanger
-  --{ listAppend :: (a -> IO ()) 
 
 -- if we abstracted listChange (perhaps have a ListChanger record type that
 -- holds the functions for delete, append, etc) we could call it twice, once to
@@ -87,36 +81,29 @@ pageChange (State oldf oldts olded) (State newf newts newed) = do
 -- that would mean even less DOM perturbation
 listChange :: [Todo] -> [Todo] -> IO ()
 listChange [] [] = return ()
-listChange [] (n:ns) = do
-  listAppend n
-  listChange [] ns
-listChange (o:os) [] = do
-  listDelete o
-  listChange os []
+listChange [] (n:ns) = todoAppend n >> listChange [] ns
+listChange (o:os) [] = todoDelete o >> listChange os []
 listChange old@(o:os) new@(n:ns) =
   case (compare `on` todoId) o n of
-    EQ -> do
-      when (o /= n) $ todoChange o n
-      listChange os ns
-    LT -> do
-      listDelete o
-      listChange os new
-    GT -> do
-      listInsert n o
-      listChange old ns
+    EQ -> when (o /= n) $ todoChange o n >> listChange os ns
+    LT -> todoDelete o >> listChange os new
+    GT -> todoInsert n o >> listChange old ns
+
+filterSelector :: Text -> Text
+filterSelector = ("a#filter-" ++)
 
 todoSelector :: Todo -> Text
 todoSelector t = "#todo-list li[n='" ++ tshow (todoId t) ++ "']"
 
-listDelete t = select (todoSelector t) >>= detach
+todoDelete t = select (todoSelector t) >>= detach
 
-listAppend item = do
-  x <- select $ listItem item
+todoAppend item = do
+  x <- select $ todoItem item
   select "#todo-list" >>= appendJQuery x
 
-listInsert item b = select (todoSelector b) >>= before (listItem item)
+todoInsert item b = select (todoSelector b) >>= before (todoItem item)
 
-listItem (Todo i t c e) =
+todoItem (Todo i t c e) =
   T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
     $if e 
       <li .editing n=#{i}>
@@ -144,7 +131,7 @@ todoChange o@(Todo i ot oc oe) n@(Todo _ nt nc ne) = do
              J.find "input.toggle" >>= setProp "checked" "true"
            return ()
   when (oe /= ne) $ do
-    replaceWith (listItem n) x
+    replaceWith (todoItem n) x
     when ne $ select "#todo-list li.editing input" >>= focus >> return ()
   
 initClicks :: IORef State -> IO ()
@@ -165,8 +152,7 @@ initClicks stateRef = do
   where
     -- currently handing f straight to the State changer - would it make more
     -- sense to provide an eventFn that can extract it?
-    filterClick f = select ("a#filter-" ++ f) >>=
-                      doClick eventNull (moveTo f)
+    filterClick f = select (filterSelector f) >>= doClick eventNull (moveTo f)
     doClick ef sf = click (eventHandle stateRef ef sf) def
     doOn evt desc ef sf =
       J.on (eventHandle stateRef ef sf) evt
@@ -241,6 +227,7 @@ keyEdit (mi, todo, k) s
     fin t = t { todoText = todo, todoEditing = False }
     abndn t = t { todoEditing = False }
 
+-- this seems repetitive
 updateBindings :: [Todo] -> [Todo] -> IO ()
 updateBindings old new = do
   when (oldLeft /= newLeft) $
