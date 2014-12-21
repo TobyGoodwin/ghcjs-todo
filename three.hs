@@ -30,15 +30,16 @@ main = do
   let f = if T.null h then "all" else T.drop 1 h
   stateRef <- newIORef stateNull
   stateChange stateRef (const (stateInit f))
-  updateBindings stateRef
+  -- updateBindings stateRef
   initClicks stateRef
   where
+    -- stateNull = State "" [] True -- editing true so we reset input placeholder
     stateNull = State "" [] False
     stateInit f = State f initialTodos False
 
 -- wildly generic event handler. call eventFn to munge the event in some way,
 -- making the result of that available to stateFn, a pure State changer
-eventHandle :: Show a => IORef State -> (Event -> IO a) -> (a -> State -> State) ->
+eventHandle :: IORef State -> (Event -> IO a) -> (a -> State -> State) ->
                 Event -> IO ()
 eventHandle stateRef eventFn stateFn e = do
   x <- eventFn e
@@ -50,6 +51,7 @@ eventHandle stateRef eventFn stateFn e = do
 stateChange :: IORef State -> (State -> State) -> IO ()
 stateChange stateRef f = do
   (old, new) <- atomicModifyIORef stateRef f'
+  -- handy for debugging
   -- myThing <- select $ "<div>old is: " ++ tshow old ++ "</div>"
   -- select "body" >>= appendJQuery myThing
   -- myThing <- select $ "<div>new is: " ++ tshow new ++ "</div>"
@@ -67,10 +69,15 @@ checkedit _ = do
 checkedit2 () s = s
 
 pageChange :: State -> State -> IO ()
-pageChange (State oldf oldts olded) (State newf newts newed) = do
+pageChange (State oldf oldts olded) new@(State newf newts newed) = do
   listChange (prep oldf oldts) (prep newf newts)
   when (olded && not newed) $
     select "input#new-todo" >>= setVal "" >> return ()
+  when (oldf /= newf) $ do
+    select ("a#filter-" ++ oldf) >>= removeClass "selected"
+    select ("a#filter-" ++ newf) >>= addClass "selected"
+    return ()
+  updateBindings oldts newts
   return ()
   where
     prep f = sortBy (compare `on` todoId) . filter (todoFilter f)
@@ -151,16 +158,18 @@ todoChange (Todo i ot oc oe) n@(Todo _ nt nc ne) = do
   
 initClicks :: IORef State -> IO ()
 initClicks stateRef = do
-  select "input#new-todo" >>=
-    J.on (eventHandle stateRef eventKey create) "keyup" def
+  n <- select "input#new-todo"
+  doOn "keyup" "" eventValKey create n
+  doOn "focusout" "" eventValEnter create n
+    -- J.on (eventHandle stateRef eventKey create) "keyup" def
   select "button#clear-completed" >>= doClick eventNull todoClear
   select "input#toggle-all" >>= doClick eventChecked toggleAll
   mapM filterClick ["all", "active", "completed"]
   s <- select "ul#todo-list"
-  doOn "change" "input.toggle" eventTodoIndex toggle s
-  doOn "click" "label" eventTodoIndex editing s
-  doOn "click" "button.destroy" eventTodoIndex destroy s
-  doOn "focusout" "li.editing" eventIndexText acceptEdit s
+  doOn "change" "input.toggle" eventIndex toggle s
+  doOn "click" "label" eventIndex editing s
+  doOn "click" "button.destroy" eventIndex destroy s
+  doOn "focusout" "li.editing" eventIndexTextEnter keyEdit s
   doOn "keyup" "li.editing" eventIndexTextKey keyEdit s
   return ()
   where
@@ -173,25 +182,27 @@ initClicks stateRef = do
       J.on (eventHandle stateRef ef sf) evt def { hsDescendantFilter = Just desc }
 
 eventNull _ = return ()
-eventTodoIndex e = do
+eventIndex e = do
   a <- target e >>= selectElement >>= parent >>= getAttr "n"
   return $ readMay a
 eventChecked e = target e >>= selectElement >>= is ":checked"
-eventKey e = do
+eventVal e = target e >>= selectElement >>= getVal
+eventValKey e = do
+  v <- eventVal e
   k <- which e
-  v <- target e >>= selectElement >>= getVal
-  return (k, v)
-eventIndexText e = do
-  x <- target e >>= selectElement
-  p <- parent x
-  n <- getAttr "n" p
-  t <- getText x
-  return (readMay n, t)
+  return (v, k)
+eventValEnter e = do
+  v <- eventVal e
+  return (v, keyEnter)
 eventIndexTextKey e = do
-  i <- eventTodoIndex e
-  v <- target e >>= selectElement >>= getVal
-  k <- which e
+  i <- eventIndex e
+  (v, k) <- eventValKey e
   return (i, v, k)
+-- moving focus out of editing box is equivalent to hitting enter
+eventIndexTextEnter e = do
+  i <- eventIndex e
+  v <- target e >>= selectElement >>= getVal
+  return (i, v, keyEnter)
 
 todoClear :: () -> State -> State
 todoClear _ s = s { stateTodos = filter (not . todoStatus) (stateTodos s) }
@@ -244,12 +255,14 @@ toggleAll x s = s { stateTodos = map setStatus (stateTodos s) }
 keyEnter = 13 :: Int
 keyEscape = 27 :: Int
 
-create :: (Int, Text) -> State -> State
-create (k, todo) s
-  | k == keyEnter = s { stateTodos = newt : ts, stateEditing = False }
-  | k == keyEscape = s { stateEditing = False }
+create :: (Text, Int) -> State -> State
+create (todo, k) s
+  | k == keyEnter = if T.null todo then abandon
+                      else s { stateTodos = newt : ts, stateEditing = False }
+  | k == keyEscape = abandon
   | otherwise = s { stateEditing = True }
   where
+    abandon = s { stateEditing = False }
     ts = stateTodos s
     m = fromMaybe 0 (maximumMay $ map todoId ts)
     newt = Todo (m+1) todo False False
@@ -257,10 +270,11 @@ create (k, todo) s
 keyEdit :: (Maybe TodoId, Text, Int) -> State -> State
 keyEdit (mi, todo, k) s
   | k == keyEnter = stateTodosChange fin mi s
-  -- | k == keyEscape = s { 
+  | k == keyEscape = stateTodosChange abndn mi s
   | otherwise = s
   where
     fin t = t { todoText = todo, todoEditing = False }
+    abndn t = t { todoEditing = False }
 
 {-
 acceptEdit stateRef n e = do
@@ -277,6 +291,7 @@ acceptEdit (i, t) s =
     Nothing -> create (keyEnter, t) -- cannot happen?
     Just todo -> s { stateTodos = todo { todoText = t } : L.delete t (stateTodos s) }
 -}
+{-
 acceptEdit :: (Maybe Int, Text) -> State -> State
 acceptEdit (Nothing, _) s = s
 acceptEdit (Just i, t) s =
@@ -284,6 +299,7 @@ acceptEdit (Just i, t) s =
     Nothing -> create (keyEnter, t) s -- cannot happen?
     Just todo -> s { stateTodos = todo { todoText = t } : L.delete todo ts }
   where ts = stateTodos s
+  -}
 
 updateTodos :: IORef State -> IO ()
 updateTodos stateRef = do
@@ -322,13 +338,6 @@ keyEdit stateRef n e = do
   k <- which e
   when (chr k == '\r') $ acceptEdit stateRef n e
   when (chr k == '\ESC') $ updateTodos stateRef -- abort
-
-eventIndexText e = do
-  x <- target e >>= selectElement
-  p <- parent x
-  n <- getAttr "n" p
-  t <- getText x
-  return (readMay n, t)
 
 acceptEdit stateRef n e = do
   x <- target e >>= selectElement
@@ -372,23 +381,31 @@ todoUpdate n t ts =
     Just todo -> todo { todoText = t } : L.delete todo ts
 -}
 
-updateBindings stateRef = do
-  State f ts _ <- readIORef stateRef
-  -- handy for debugging
-  -- myThing <- select $ "<div>" ++ tshow f ++ "</div>"
-  -- select "body" >>= appendJQuery myThing
-  let nDone = L.length $ L.filter todoStatus ts
-      nLeft = L.length ts - nDone
-      pLeft = (if nLeft == 1 then "item" else "items") ++ " left"
-  select "#bind-n-left" >>= setText (tshow nLeft)
-  select "#bind-phrase-left" >>= setText pLeft
-  select "#bind-n-done" >>= setText (tshow nDone)
-  select "button#clear-completed" >>=
-    setAttr "style" (if nDone == 0 then "display:none" else "display:block")
-  select "input#toggle-all"
-    >>= if nLeft == 0 then setProp "checked" "true" else removeProp "checked"
-  select ("a#filter-" ++ f) >>= addClass "selected"
-  return ()
+updateBindings :: [Todo] -> [Todo] -> IO ()
+updateBindings old new = do
+  when (oldLeft /= newLeft) $
+    select "#bind-n-left" >>= setText (tshow newLeft) >> return ()
+  when (oldWord /= newWord) $
+    select "#bind-phrase-left" >>= setText newWord >> return ()
+  when (oldDone /= newDone) $
+    select "#bind-n-done" >>= setText (tshow newDone) >> return ()
+  when ((oldDone == 0) /= (newDone == 0)) $ 
+    select "button#clear-completed" >>=
+      setAttr "style" ("display:" ++
+        if newDone == 0 then "none" else "block") >> return ()
+  when ((oldDone /= 0 && oldLeft == 0) /= (newDone /= 0 && newLeft == 0)) $ do
+    select "input#toggle-all" >>=
+      if newDone /= 0 && newLeft == 0
+        then setProp "checked" "true"
+        else removeProp "checked"
+    return ()
+  where
+    newDone = L.length $ L.filter todoStatus new
+    oldDone = L.length $ L.filter todoStatus old
+    newLeft = L.length new - newDone
+    oldLeft = L.length old - oldDone
+    newWord = (if newLeft == 1 then "item" else "items") ++ " left"
+    oldWord = (if oldLeft == 1 then "item" else "items") ++ " left"
 
 type TodoId = Int
 data Todo = Todo { todoId :: TodoId
@@ -402,8 +419,7 @@ type Filter = Todo -> Bool
 data State = State { stateFilter :: FilterName
                    , stateTodos :: [Todo]
                    , stateEditing :: Bool
-                   }
-  deriving Show
+                   } deriving Show
 
 initialTodos :: [Todo]
 initialTodos =
