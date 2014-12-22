@@ -13,7 +13,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as LT
 import GHCJS.Prim (fromJSString)
 import GHCJS.Types (JSString)
-import JavaScript.JQuery hiding (filter, find, not, on)
+import JavaScript.JQuery hiding (filter, find, last, not, on)
 import qualified JavaScript.JQuery as J
 import Text.Blaze.Html.Renderer.Text (renderHtml)
 import Text.Hamlet (shamlet)
@@ -68,11 +68,11 @@ pageChange (State oldf oldts olded) (State newf newts newed) = do
       mapM_ reveal $ newshows L.\\ oldshows
       mapM_ hide $ oldshows L.\\ newshows
     else do
-      -- let oldshows = map todoId $ filter (todoFilter oldf) olds
-      -- next line works, but does too much work
-      let oldshows = map todoId news
+      let oldshows = map todoId $ filter (todoFilter oldf) olds
       mapM_ reveal $ newshows L.\\ oldshows
       mapM_ hide $ oldshows L.\\ newshows
+      when (newf == "completed" && length olds < length news) $
+        hide $ todoId (L.last news)
   updateBindings oldts newts
   where
     prep = sortBy (compare `on` todoId)
@@ -225,9 +225,6 @@ create (todo, k) s
     abandon = s { stateEditing = False }
     ts = stateTodos s
     m = fromMaybe 0 (maximumMay $ map todoId ts)
-    -- if we're on the completed screen, the new todo is already marked done;
-    -- this avoids an awkward corner case, and makes some kind of sense
-    -- newt = Todo (m+1) todo (stateFilter s == "completed") False
     newt = Todo (m+1) todo False False
 
 keyEdit :: (Maybe TodoId, Text, Int) -> State -> State
