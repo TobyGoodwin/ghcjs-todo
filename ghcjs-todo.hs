@@ -37,15 +37,14 @@ main = do
 -- making the result of that available to stateFn, a pure State changer
 eventHandle :: IORef State -> (Event -> IO a) -> (a -> State -> State) ->
                 Event -> IO ()
-eventHandle stateRef eventFn stateFn e = do
+eventHandle stateRef eventFn stateFn e = void $ do
   x <- eventFn e
   -- myThing <- select $ "<div>eventhandle: x is " ++ tshow x ++ "</div>"
   -- select "body" >>= appendJQuery myThing
   stateChange stateRef (stateFn x)
-  return ()
 
 stateChange :: IORef State -> (State -> State) -> IO ()
-stateChange stateRef f = do
+stateChange stateRef f = void $ do
   -- handy for debugging
   -- myThing <- select $ "<div>old is: " ++ tshow old ++ "</div>"
   -- select "body" >>= appendJQuery myThing
@@ -53,27 +52,32 @@ stateChange stateRef f = do
   -- select "body" >>= appendJQuery myThing
   (old, new) <- atomicModifyIORef stateRef f'
   pageChange old new
-  return ()
   where
     f' o = let n = f o in (n, (o, n))
 
 pageChange :: State -> State -> IO ()
 pageChange (State oldf oldts olded) (State newf newts newed) = do
   listChange olds news
-  mapM_ reveal $ nshows L.\\ oshows
-  mapM_ hide $ oshows L.\\ nshows
   when (olded && not newed) $
-    select "input#new-todo" >>= setVal "" >> return ()
-  when (oldf /= newf) $ do
-    select (filterSelector oldf) >>= removeClass "selected"
-    select (filterSelector newf) >>= addClass "selected"
-    return ()
+    void $ select "input#new-todo" >>= setVal ""
+  if (oldf /= newf)
+    then do
+      select (filterSelector oldf) >>= removeClass "selected"
+      select (filterSelector newf) >>= addClass "selected"
+      let oldshows = map todoId $ filter (todoFilter oldf) news
+      mapM_ reveal $ newshows L.\\ oldshows
+      mapM_ hide $ oldshows L.\\ newshows
+    else do
+      -- let oldshows = map todoId $ filter (todoFilter oldf) olds
+      -- next line works, but does too much work
+      let oldshows = map todoId news
+      mapM_ reveal $ newshows L.\\ oldshows
+      mapM_ hide $ oldshows L.\\ newshows
   updateBindings oldts newts
   where
     prep = sortBy (compare `on` todoId)
     olds = prep oldts; news = prep newts
-    oshows = map todoId $ filter (todoFilter oldf) olds
-    nshows = map todoId $ filter (todoFilter newf) news
+    newshows = map todoId $ filter (todoFilter newf) news
 
 listChange :: [Todo] -> [Todo] -> IO ()
 listChange [] [] = return ()
@@ -86,10 +90,10 @@ listChange old@(o:os) new@(n:ns) =
     GT -> todoInsert n o >> listChange old ns
 
 reveal :: TodoId -> IO ()
-reveal n = select (todoIdSelector n) >>= removeClass "hidden" >> return ()
+reveal n = void $ select (todoIdSelector n) >>= removeClass "hidden"
 
 hide :: TodoId -> IO ()
-hide n = select (todoIdSelector n) >>= addClass "hidden" >> return ()
+hide n = void $ select (todoIdSelector n) >>= addClass "hidden"
 
 filterSelector :: Text -> Text
 filterSelector = ("a#filter-" ++)
@@ -100,15 +104,16 @@ todoSelector = todoIdSelector . todoId
 todoIdSelector :: TodoId -> Text
 todoIdSelector i = "#todo-list li[n='" ++ tshow i ++ "']"
 
-todoDelete t = select (todoSelector t) >>= detach
+todoDelete :: Todo -> IO ()
+todoDelete t = void $ select (todoSelector t) >>= detach
 
+todoAppend :: Todo -> IO ()
 todoAppend item = do
-  myThing <- select $ "<div>append: " ++ tshow item ++ "</div>"
-  select "body" >>= appendJQuery myThing
   x <- select $ todoItem item
-  select "#todo-list" >>= appendJQuery x
+  void $ select "#todo-list" >>= appendJQuery x
 
-todoInsert item b = select (todoSelector b) >>= before (todoItem item)
+todoInsert :: Todo -> Todo -> IO ()
+todoInsert item b = void $ select (todoSelector b) >>= before (todoItem item)
 
 todoItem (Todo i t c e) =
   T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
@@ -125,24 +130,22 @@ todoItem (Todo i t c e) =
 
 todoChange o@(Todo i ot oc oe) n@(Todo _ nt nc ne) = do
   x <- select (todoSelector o)
-  when (ot /= nt) $ setText nt x >> return ()
+  when (ot /= nt) $ void $ setText nt x
   when (oc /= nc) $ do
     -- wot no toggleClass?
     h <- hasClass "completed" x
     if h then do
-           removeClass "completed" x >>= 
+           void $ removeClass "completed" x >>= 
              J.find "input.toggle" >>= removeProp "checked"
-           return ()
          else do
-           addClass "completed" x >>=
+           void $ addClass "completed" x >>=
              J.find "input.toggle" >>= setProp "checked" "true"
-           return ()
   when (oe /= ne) $ do
     replaceWith (todoItem n) x
-    when ne $ select "#todo-list li.editing input" >>= focus >> return ()
+    when ne $ void $ select "#todo-list li.editing input" >>= focus
   
 initClicks :: IORef State -> IO ()
-initClicks stateRef = do
+initClicks stateRef = void $ do
   n <- select "input#new-todo"
   doOn "keyup" "" eventValKey create n
   doOn "focusout" "" eventValEnter create n
@@ -151,11 +154,10 @@ initClicks stateRef = do
   mapM filterClick ["all", "active", "completed"]
   s <- select "ul#todo-list"
   doOn "change" "input.toggle" eventIndex toggle s
-  doOn "click" "label" eventIndex editing s
+  doOn "dblclick" "label" eventIndex editing s
   doOn "click" "button.destroy" eventIndex destroy s
   doOn "focusout" "li.editing" eventIndexTextEnter keyEdit s
   doOn "keyup" "li.editing" eventIndexTextKey keyEdit s
-  return ()
   where
     -- currently handing f straight to the State changer - would it make more
     -- sense to provide an eventFn that can extract it?
@@ -223,6 +225,9 @@ create (todo, k) s
     abandon = s { stateEditing = False }
     ts = stateTodos s
     m = fromMaybe 0 (maximumMay $ map todoId ts)
+    -- if we're on the completed screen, the new todo is already marked done;
+    -- this avoids an awkward corner case, and makes some kind of sense
+    -- newt = Todo (m+1) todo (stateFilter s == "completed") False
     newt = Todo (m+1) todo False False
 
 keyEdit :: (Maybe TodoId, Text, Int) -> State -> State
@@ -237,23 +242,27 @@ keyEdit (mi, todo, k) s
 -- this seems repetitive
 updateBindings :: [Todo] -> [Todo] -> IO ()
 updateBindings old new = do
+  when (oldAny /= newAny) $
+    if newAny then void $ select "footer#footer" >>= removeClass "hidden"
+              else void $ select "footer#footer" >>= addClass "hidden"
   when (oldLeft /= newLeft) $
-    select "#bind-n-left" >>= setText (tshow newLeft) >> return ()
+    void $ select "#bind-n-left" >>= setText (tshow newLeft)
   when (oldWord /= newWord) $
-    select "#bind-phrase-left" >>= setText newWord >> return ()
+    void $ select "#bind-phrase-left" >>= setText newWord
   when (oldDone /= newDone) $
-    select "#bind-n-done" >>= setText (tshow newDone) >> return ()
+    void $ select "#bind-n-done" >>= setText (tshow newDone)
   when ((oldDone == 0) /= (newDone == 0)) $ 
-    select "button#clear-completed" >>=
-      setAttr "style" ("display:" ++
-        if newDone == 0 then "none" else "block") >> return ()
-  when ((oldDone /= 0 && oldLeft == 0) /= (newDone /= 0 && newLeft == 0)) $ do
+    void $ select "button#clear-completed" >>=
+      setAttr "style" ("display:" ++ if newDone == 0 then "none" else "block")
+  when ((oldDone /= 0 && oldLeft == 0) /=
+        (newDone /= 0 && newLeft == 0)) $ void $ do
     select "input#toggle-all" >>=
       if newDone /= 0 && newLeft == 0
         then setProp "checked" "true"
         else removeProp "checked"
-    return ()
   where
+    newAny = L.length new /= 0
+    oldAny = L.length old /= 0
     newDone = L.length $ L.filter todoStatus new
     oldDone = L.length $ L.filter todoStatus old
     newLeft = L.length new - newDone
