@@ -46,24 +46,22 @@ eventHandle stateRef eventFn stateFn e = do
 
 stateChange :: IORef State -> (State -> State) -> IO ()
 stateChange stateRef f = do
-  (old, new) <- atomicModifyIORef stateRef f'
   -- handy for debugging
   -- myThing <- select $ "<div>old is: " ++ tshow old ++ "</div>"
   -- select "body" >>= appendJQuery myThing
   -- myThing <- select $ "<div>new is: " ++ tshow new ++ "</div>"
   -- select "body" >>= appendJQuery myThing
+  (old, new) <- atomicModifyIORef stateRef f'
   pageChange old new
   return ()
   where
     f' o = let n = f o in (n, (o, n))
 
--- in this implementation, we filter the lists before handing to listChange. an
--- alternative would be to pass the filter function down to listChange, so it
--- can simply hide non-visible items: this would result in less DOM
--- perturbation
 pageChange :: State -> State -> IO ()
 pageChange (State oldf oldts olded) (State newf newts newed) = do
-  listChange (prep oldf oldts) (prep newf newts)
+  listChange olds news
+  mapM_ reveal $ nshows L.\\ oshows
+  mapM_ hide $ oshows L.\\ nshows
   when (olded && not newed) $
     select "input#new-todo" >>= setVal "" >> return ()
   when (oldf /= newf) $ do
@@ -71,33 +69,42 @@ pageChange (State oldf oldts olded) (State newf newts newed) = do
     select (filterSelector newf) >>= addClass "selected"
     return ()
   updateBindings oldts newts
-  return ()
   where
-    prep f = sortBy (compare `on` todoId) . filter (todoFilter f)
+    prep = sortBy (compare `on` todoId)
+    olds = prep oldts; news = prep newts
+    oshows = map todoId $ filter (todoFilter oldf) olds
+    nshows = map todoId $ filter (todoFilter newf) news
 
--- if we abstracted listChange (perhaps have a ListChanger record type that
--- holds the functions for delete, append, etc) we could call it twice, once to
--- change the actual list, and again to manipulate "hidden" class attributes.
--- that would mean even less DOM perturbation
 listChange :: [Todo] -> [Todo] -> IO ()
 listChange [] [] = return ()
 listChange [] (n:ns) = todoAppend n >> listChange [] ns
 listChange (o:os) [] = todoDelete o >> listChange os []
 listChange old@(o:os) new@(n:ns) =
   case (compare `on` todoId) o n of
-    EQ -> when (o /= n) $ todoChange o n >> listChange os ns
+    EQ -> (when (o /= n) $ todoChange o n) >> listChange os ns
     LT -> todoDelete o >> listChange os new
     GT -> todoInsert n o >> listChange old ns
+
+reveal :: TodoId -> IO ()
+reveal n = select (todoIdSelector n) >>= removeClass "hidden" >> return ()
+
+hide :: TodoId -> IO ()
+hide n = select (todoIdSelector n) >>= addClass "hidden" >> return ()
 
 filterSelector :: Text -> Text
 filterSelector = ("a#filter-" ++)
 
 todoSelector :: Todo -> Text
-todoSelector t = "#todo-list li[n='" ++ tshow (todoId t) ++ "']"
+todoSelector = todoIdSelector . todoId
+
+todoIdSelector :: TodoId -> Text
+todoIdSelector i = "#todo-list li[n='" ++ tshow i ++ "']"
 
 todoDelete t = select (todoSelector t) >>= detach
 
 todoAppend item = do
+  myThing <- select $ "<div>append: " ++ tshow item ++ "</div>"
+  select "body" >>= appendJQuery myThing
   x <- select $ todoItem item
   select "#todo-list" >>= appendJQuery x
 
