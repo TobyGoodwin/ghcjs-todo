@@ -31,7 +31,7 @@ main = do
   initClicks stateRef
   where
     stateNull = State "" [] False
-    stateInit f = State f initialTodos False
+    stateInit f = State f (sort initialTodos) False
 
 -- wildly generic event handler. call eventFn to munge the event in some way,
 -- making the result of that available to stateFn, a pure State changer
@@ -55,29 +55,29 @@ stateChange stateRef f = void $ do
   where
     f' o = let n = f o in (n, (o, n))
 
+-- listChange will add or delete <li> elements to reflect the state change;
+-- updateBindings 
 pageChange :: State -> State -> IO ()
 pageChange (State oldf oldts olded) (State newf newts newed) = do
-  listChange olds news
+  listChange oldts newts
+  updateBindings oldts newts
   when (olded && not newed) $
     void $ select "input#new-todo" >>= setVal ""
   if (oldf /= newf)
     then do
       select (filterSelector oldf) >>= removeClass "selected"
       select (filterSelector newf) >>= addClass "selected"
-      let oldshows = map todoId $ filter (todoFilter oldf) news
+      let oldshows = map todoId $ filter (todoFilter oldf) newts
       mapM_ reveal $ newshows L.\\ oldshows
       mapM_ hide $ oldshows L.\\ newshows
     else do
-      let oldshows = map todoId $ filter (todoFilter oldf) olds
+      let oldshows = map todoId $ filter (todoFilter oldf) oldts
       mapM_ reveal $ newshows L.\\ oldshows
       mapM_ hide $ oldshows L.\\ newshows
-      when (newf == "completed" && length olds < length news) $
-        hide $ todoId (L.last news)
-  updateBindings oldts newts
+      when (newf == "completed" && length oldts < length newts) $
+        hide $ todoId (L.last newts)
   where
-    prep = sortBy (compare `on` todoId)
-    olds = prep oldts; news = prep newts
-    newshows = map todoId $ filter (todoFilter newf) news
+    newshows = map todoId $ filter (todoFilter newf) newts
 
 listChange :: [Todo] -> [Todo] -> IO ()
 listChange [] [] = return ()
@@ -201,7 +201,7 @@ stateTodosChange _ Nothing s = s
 stateTodosChange f (Just n) s =
   case find ((n ==). todoId) ts of
     Nothing -> s
-    Just t -> s { stateTodos = f t : L.delete t ts }
+    Just t -> s { stateTodos = sort $ f t : L.delete t ts }
   where ts = stateTodos s
 
 editing :: Maybe Int -> State -> State
@@ -218,7 +218,8 @@ keyEscape = 27 :: Int
 create :: (Text, Int) -> State -> State
 create (todo, k) s
   | k == keyEnter = if T.null todo then abandon
-                      else s { stateTodos = newt : ts, stateEditing = False }
+                      else s { stateTodos = sort $ newt : ts
+                             , stateEditing = False }
   | k == keyEscape = abandon
   | otherwise = s { stateEditing = True }
   where
@@ -273,6 +274,9 @@ data Todo = Todo { todoId :: TodoId
                  , todoStatus :: Bool
                  , todoEditing :: Bool
                  } deriving (Eq, Show)
+
+instance Ord Todo
+  where compare = compare `on` todoId
 
 type FilterName = Text
 type Filter = Todo -> Bool
