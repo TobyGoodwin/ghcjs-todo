@@ -21,5 +21,14 @@ executable ghcjs-todo
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.7 && <4.8
+                     , blaze-html
+
+                     , classy-prelude
+                     , data-default
+                     , ghcjs-base
+                     , ghcjs-jquery
+                     , ghcjs-prim
+                     , shakespeare
+                     , text
   -- hs-source-dirs:      
   default-language:    Haskell2010
