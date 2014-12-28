@@ -56,7 +56,13 @@ stateChange stateRef f = void $ do
     f' o = let n = f o in (n, (o, n))
 
 -- listChange will add or delete <li> elements to reflect the state change;
--- updateBindings 
+-- updateBindings deals with the counts in the footer;
+-- we then need to add and remove "hidden" classes according to the current
+-- filter - this leaves an awkward corner case, since if we add a new todo when
+-- the filter is "completed", we need it to vanish immediately. personally, i
+-- think a better interface is instead to mark it as done, and leave it
+-- displayed (which also avoids the special code here), but that's not what the
+-- other implementations of the todo app do
 pageChange :: State -> State -> IO ()
 pageChange (State oldf oldts olded) (State newf newts newed) = do
   listChange oldts newts
