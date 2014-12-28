@@ -59,10 +59,10 @@ stateChange stateRef f = void $ do
 -- updateBindings deals with the counts in the footer;
 -- we then need to add and remove "hidden" classes according to the current
 -- filter - this leaves an awkward corner case, since if we add a new todo when
--- the filter is "completed", we need it to vanish immediately. personally, i
--- think a better interface is instead to mark it as done, and leave it
--- displayed (which also avoids the special code here), but that's not what the
--- other implementations of the todo app do
+-- the filter is "completed", we need it to vanish immediately. 
+-- (*) personally, i think a better interface is instead to mark it as done,
+-- and leave it displayed (which also avoids the special code here), but that's
+-- not what the other implementations of the todo app do
 pageChange :: State -> State -> IO ()
 pageChange (State oldf oldts olded) (State newf newts newed) = do
   listChange oldts newts
@@ -80,6 +80,8 @@ pageChange (State oldf oldts olded) (State newf newts newed) = do
       let oldshows = map todoId $ filter (todoFilter oldf) oldts
       mapM_ reveal $ newshows L.\\ oldshows
       mapM_ hide $ oldshows L.\\ newshows
+      -- (*) this is the corner case: remove the next statement and instate the
+      -- one in create if you prefer my "already done" solution
       when (newf == "completed" && length oldts < length newts) $
         hide $ todoId (L.last newts)
   where
@@ -185,14 +187,14 @@ eventIndexTextKey e = (,,) <$> eventIndex e <*> eventVal e <*> which e
 eventIndexTextEnter e = (,,) <$> eventIndex e <*> eventVal e <*> pure keyEnter
 
 todoClear :: () -> State -> State
-todoClear _ s = s { stateTodos = filter (not . todoStatus) (stateTodos s) }
+todoClear _ s = s { stateTodos = filter (not . todoDone) (stateTodos s) }
 
 moveTo :: Text -> () -> State -> State
 moveTo f _ s = s { stateFilter = f }
 
 toggle :: Maybe Int -> State -> State
 toggle = stateTodosChange tog
-  where tog t = t { todoStatus = not (todoStatus t) }
+  where tog t = t { todoDone = not (todoDone t) }
 
 destroy :: Maybe Int -> State -> State
 destroy Nothing s = s
@@ -216,7 +218,7 @@ editing = stateTodosChange (\x -> x { todoEditing = True })
 toggleAll :: Bool -> State -> State
 toggleAll x s = s { stateTodos = map setStatus (stateTodos s) }
   where
-    setStatus t = t { todoStatus = x }
+    setStatus t = t { todoDone = x }
 
 keyEnter = 13 :: Int
 keyEscape = 27 :: Int
@@ -232,6 +234,9 @@ create (todo, k) s
     abandon = s { stateEditing = False }
     ts = stateTodos s
     m = fromMaybe 0 (maximumMay $ map todoId ts)
+    -- (*) this is the line you need if you think that new todos should be
+    -- marked done if entered on the "completed" screen
+    -- newt = Todo (m+1) todo (stateFilter s == "completed") False
     newt = Todo (m+1) todo False False
 
 keyEdit :: (Maybe TodoId, Text, Int) -> State -> State
@@ -267,8 +272,8 @@ updateBindings old new = do
   where
     newAny = L.length new /= 0
     oldAny = L.length old /= 0
-    newDone = L.length $ L.filter todoStatus new
-    oldDone = L.length $ L.filter todoStatus old
+    newDone = L.length $ L.filter todoDone new
+    oldDone = L.length $ L.filter todoDone old
     newLeft = L.length new - newDone
     oldLeft = L.length old - oldDone
     newWord = (if newLeft == 1 then "item" else "items") ++ " left"
@@ -277,7 +282,7 @@ updateBindings old new = do
 type TodoId = Int
 data Todo = Todo { todoId :: TodoId
                  , todoText :: Text
-                 , todoStatus :: Bool
+                 , todoDone :: Bool
                  , todoEditing :: Bool
                  } deriving (Eq, Show)
 
@@ -299,6 +304,6 @@ initialTodos =
   ]
 
 todoFilter :: FilterName -> Filter
-todoFilter "active" = not . todoStatus
-todoFilter "completed" = todoStatus
+todoFilter "active" = not . todoDone
+todoFilter "completed" = todoDone
 todoFilter _ = const True
