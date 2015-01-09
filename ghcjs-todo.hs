@@ -11,7 +11,7 @@ import qualified Data.List as L hiding ((++))
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as LT
-import GHCJS.Prim (fromJSString)
+import GHCJS.Prim (fromJSString, toJSString)
 import GHCJS.Types (JSString)
 import JavaScript.JQuery hiding (filter, find, last, not, on)
 import qualified JavaScript.JQuery as J
@@ -26,12 +26,15 @@ foreign import javascript safe   "window.location.hash = $1;"
 main = do
   h <- T.pack . fromJSString <$> windowLocationHash
   let f = if T.null h then "all" else T.drop 1 h
-  stateRef <- newIORef stateNull
-  stateChange stateRef (const (stateInit f))
+  todos <- sort <$> initialTodos
+  let stateInit = State f todos False
+  stateRef <- newIORef stateInit
+  updateBindings stateNull stateInit bindings
+  updateTweaks stateNull stateInit tweaksBool
+  mapM_ domAppend todos
   initClicks stateRef
   where
     stateNull = State "" [] False
-    stateInit f = State f (sort initialTodos) False
 
 -- wildly generic event handler. call eventFn to munge the event in some way,
 -- making the result of that available to stateFn, a pure State changer
@@ -64,11 +67,12 @@ stateChange stateRef f = void $ do
 -- and leave it displayed (which also avoids the special code here), but that's
 -- not what the other implementations of the todo app do
 pageChange :: State -> State -> IO ()
-pageChange (State oldf oldts olded) (State newf newts newed) = do
-  listChange oldts newts
-  updateBindings oldts newts
+pageChange os@(State oldf oldts olded) ns@(State newf newts newed) = do
   when (olded && not newed) $
-    void $ select "input#new-todo" >>= setVal ""
+    void $ select newTodoSelector >>= setVal ""
+  updateBindings os ns bindings
+  updateTweaks os ns tweaksBool
+  listChange oldts newts
   if (oldf /= newf)
     then do
       select (filterSelector oldf) >>= removeClass "selected"
@@ -112,11 +116,20 @@ todoSelector = todoIdSelector . todoId
 todoIdSelector :: TodoId -> Text
 todoIdSelector i = "#todo-list li[n='" ++ tshow i ++ "']"
 
+buttonClearSelector = "button#clear-completed" :: Text
+footerSelector = "footer#footer" :: Text
+newTodoSelector = "input#new-todo" :: Text
+
 todoDelete :: Todo -> IO ()
-todoDelete t = void $ select (todoSelector t) >>= detach
+todoDelete t = do
+  void $ select (todoSelector t) >>= detach
 
 todoAppend :: Todo -> IO ()
 todoAppend item = do
+  domAppend item
+
+domAppend :: Todo -> IO ()
+domAppend item = do
   x <- select $ todoItem item
   void $ select "#todo-list" >>= appendJQuery x
 
@@ -151,10 +164,11 @@ todoChange o@(Todo i ot oc oe) n@(Todo _ nt nc ne) = do
   when (oe /= ne) $ do
     replaceWith (todoItem n) x
     when ne $ void $ select "#todo-list li.editing input" >>= focus
-  
+
 initClicks :: IORef State -> IO ()
 initClicks stateRef = void $ do
-  n <- select "input#new-todo"
+  n <- select newTodoSelector
+  setVal "" n
   doOn "keyup" "" eventValKey create n
   doOn "focusout" "" eventValEnter create n
   select "button#clear-completed" >>= doClick eventNull todoClear
@@ -248,36 +262,70 @@ keyEdit (mi, todo, k) s
     fin t = t { todoText = todo, todoEditing = False }
     abndn t = t { todoEditing = False }
 
--- this seems repetitive
-updateBindings :: [Todo] -> [Todo] -> IO ()
-updateBindings old new = do
-  when (oldAny /= newAny) $
-    if newAny then void $ select "footer#footer" >>= removeClass "hidden"
-              else void $ select "footer#footer" >>= addClass "hidden"
-  when (oldLeft /= newLeft) $
-    void $ select "#bind-n-left" >>= setText (tshow newLeft)
-  when (oldWord /= newWord) $
-    void $ select "#bind-phrase-left" >>= setText newWord
-  when (oldDone /= newDone) $
-    void $ select "#bind-n-done" >>= setText (tshow newDone)
-  when ((oldDone == 0) /= (newDone == 0)) $ 
-    void $ select "button#clear-completed" >>=
-      setAttr "style" ("display:" ++ if newDone == 0 then "none" else "block")
-  when ((oldDone /= 0 && oldLeft == 0) /=
-        (newDone /= 0 && newLeft == 0)) $ void $ do
-    select "input#toggle-all" >>=
-      if newDone /= 0 && newLeft == 0
-        then setProp "checked" "true"
-        else removeProp "checked"
+-- |A 'Binding' represents some text in the application which depends on the
+-- 'State'. In the DOM, there needs to be a '<span>' element which will be
+-- updated when the 'State' changes. (For a more complicated app, it might be
+-- worth parameterizing 'Binding' on a type, much as 'Tweak' is.)
+data Binding =
+  Binding { bindingId :: Text -- ^ The 'id' of the '<span>' element
+          , bindingFn :: State -> Text -- ^ Function to produce the bound value
+          }
+
+-- |'updateBindings' takes an old and a new 'State' and a list of 'Binding's.
+-- For each 'Binding', if the result of applying the 'bindingFn' to old and new 
+-- differs, the DOM is updated with the new value.
+updateBindings :: State -> State -> [Binding] -> IO ()
+updateBindings old new = mapM_ binder
   where
-    newAny = L.length new /= 0
-    oldAny = L.length old /= 0
-    newDone = L.length $ L.filter todoDone new
-    oldDone = L.length $ L.filter todoDone old
-    newLeft = L.length new - newDone
-    oldLeft = L.length old - oldDone
-    newWord = (if newLeft == 1 then "item" else "items") ++ " left"
-    oldWord = (if oldLeft == 1 then "item" else "items") ++ " left"
+    binder (Binding i f) =
+      let ov = f old; nv = f new
+      in when (ov /= nv) $ void $ select ("#" ++ i) >>= setText nv
+
+bindings =
+  [ Binding "bind-n-done" showDone
+  , Binding "bind-n-left" showLeft
+  , Binding "bind-phrase-left" phraseLeft
+  ]
+  where
+    showDone = tshow . done
+    showLeft = tshow . left
+    phraseLeft s = (if left s == 1 then "item" else "items") ++ " left"
+    left s = total s - done s
+    total = L.length . stateTodos
+    done = L.length . L.filter todoDone . stateTodos
+
+-- |A 'Tweak' is more general than a 'Binding', with an arbitrary 'tweakGuard'
+-- function, and an arbitrary action.
+data Tweak a =
+  Tweak { tweakGuard :: State -> a -- ^Function of 'State' to see change
+        , tweakAction :: State -> IO () -- ^Action to apply
+        }
+
+tweaksBool = 
+  [ Tweak noTodos footer
+  , Tweak noneDone buttonDone
+  , Tweak allDone checkboxDone
+  ]
+  where
+    noTodos = L.null . stateTodos
+    footer s = void $ select footerSelector >>= hideIf (noTodos s)
+    noneDone = L.null  . L.filter todoDone . stateTodos
+    buttonDone s = void $ select buttonClearSelector >>=
+                          hideIf (noneDone s)
+    allDone s = not (noTodos s) &&
+                  L.null (L.filter (not . todoDone) (stateTodos s))
+    checkboxDone s = void $ select "input#toggle-all" >>=
+                      if allDone s then setProp "checked" "true"
+                        else removeProp "checked"
+    hideIf c = (if c then addClass else removeClass) "hidden"
+
+-- |'updateTweaks' takes an old and a new 'State' and a list of 'Tweak's.
+-- For each 'Tweak', if the result of applying the 'tweakGuard' function to old
+-- and new differs, the 'tweakAction' is performed.
+updateTweaks :: Eq a => State -> State -> [Tweak a] -> IO ()
+updateTweaks old new = mapM_ tweaker
+  where
+    tweaker (Tweak c a) = when (c old /= c new) $ a new
 
 type TodoId = Int
 data Todo = Todo { todoId :: TodoId
@@ -296,12 +344,13 @@ data State = State { stateFilter :: FilterName
                    , stateEditing :: Bool
                    } deriving Show
 
-initialTodos :: [Todo]
+initialTodos :: IO [Todo]
 initialTodos =
-  [ Todo 3 "Steal underpants" True False
-  , Todo 14 "???" False False
-  , Todo 16 "Profit!" False False
-  ]
+  return 
+    [ Todo 3 "Steal underpants" True False
+    , Todo 14 "???" False False
+    , Todo 16 "Profit!" False False
+    ]
 
 todoFilter :: FilterName -> Filter
 todoFilter "active" = not . todoDone
