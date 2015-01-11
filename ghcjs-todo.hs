@@ -13,8 +13,10 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as LT
 import GHCJS.Prim (fromJSString, toJSString)
 import GHCJS.Types (JSString)
-import JavaScript.JQuery hiding (filter, find, last, not, on)
+import JavaScript.JQuery hiding (Event, filter, find, last, not, on)
 import qualified JavaScript.JQuery as J
+import Reactive.Banana
+import Reactive.Banana.Frameworks
 import Text.Blaze.Html.Renderer.Text (renderHtml)
 import Text.Hamlet (shamlet)
 
@@ -33,13 +35,130 @@ main = do
   updateTweaks stateNull stateInit tweaksBool
   mapM_ domAppend todos
   initClicks stateRef
+  (addHandler, fire) <- newAddHandler
+  compile (makeNetworkDescription todos addHandler) >>= actuate
+  initClicks' fire
   where
     stateNull = State "" [] False
 
+initClicks' fire = do
+  s <- select "ul#todo-list"
+  descOn deleteClick "click" s "button.destroy"
+  -- J.on (deleteClick fire) "click" def { hsDescendantFilter = Just "button.destroy" } s
+  descOn todoDoubleClick "dblclick" s "label"
+  descOn todoKeyUp "keyup" s "li.editing"
+  -- J.on (todoDoubleClick fire) "dblclick" def { hsDescendantFilter = Just "label" } s
+  where
+    descOn fn ev x desc =
+      J.on (fn fire) ev def { hsDescendantFilter = Just desc } x
+
+makeNetworkDescription init h = do
+  e <- fromAddHandler h
+  let deleteEs = filterJustMap justDeleteEs e
+  reactimate $ fmap todoDelete' deleteEs
+  let startEditEs = filterJustMap justStartEditEs e
+  reactimate $ fmap todoStartEdit startEditEs
+  let todoEnterEs = filterJustMap justTodoEnterEs e
+  reactimate $ fmap todoEnter todoEnterEs
+  let todoFns = filterJustMap justTodoFns e
+      todosB = accumB init todoFns
+  todoC <- changes todosB
+  reactimate' $ fmap (setSpan "bind-n-left" . tshow . todosLeft) <$> todoC
+  reactimate' $ fmap (setSpan "bind-phrase-left" . todosLeftPhrase) <$> todoC
+  reactimate' $ fmap (setSpan "bind-n-done" . tshow . todosDone) <$> todoC
+  reactimate' $ fmap updateTodo <$> todoC
+  where
+    filterJustMap f = filterJust . fmap f
+    setSpan x y = void $ select ("#" ++ x) >>= setText y
+
+todosLeft = L.length . filter (not . todoDone)  -- XXX use a behaviour
+todosDone = L.length . filter todoDone
+todosLeftPhrase ts = (if todosLeft ts == 1 then "item" else "items") ++ " left"
+
+data XEvent = Delete Int | StartEdit Int | TodoEnter Int Text
+
+deleteClick fire e = do
+  i <- readMay <$> (target e >>= selectElement >>= parent >>= getAttr "n")
+  case i of
+    Just i' -> fire $ Delete i'
+    Nothing -> return ()
+
+todoDoubleClick fire e = do
+  i <- readMay <$> (target e >>= selectElement >>= parent >>= getAttr "n")
+  case i of
+    Just i' -> fire $ StartEdit i'
+    Nothing -> return ()
+
+todoKeyUp fire e = do
+  k <- which e
+  case k of
+    13 -> do
+      x <- target e >>= selectElement
+      v <- getVal x
+      i <- readMay <$> (parent x >>= getAttr "n")
+      case i of
+        Just j -> fire $ TodoEnter j v
+        Nothing -> return ()
+    _ -> return ()
+
+-- temp
+todoDelete' n = todoDelete (Todo n "" False False)
+
+todoStartEdit n = do
+  x <- select (todoIdSelector n)
+  t <- J.find "label" x >>= getText
+  void $ replaceWith (editItem n t) x
+
+todoEnter (n, t) = do
+  x <- select (todoIdSelector n)
+  void $ replaceWith (todoItem' n t False) x
+
+editItem i t =
+  T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
+    <li .editing n=#{i}>
+      <input .edit value=#{t}>
+  |]
+
+todoItem' i t c =
+  T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
+    <li :c:.completed n=#{i}>
+      <input .toggle type=checkbox :c:checked>
+      <label>
+        #{t}
+      <button .destroy>
+  |]
+
+justDeleteEs (Delete n) = Just n
+justDeleteEs _ = Nothing
+
+justStartEditEs (StartEdit n) = Just n
+justStartEditEs _ = Nothing
+
+justTodoFns :: XEvent -> Maybe ([Todo] -> [Todo])
+justTodoFns (Delete n) = Just $ del n
+  where
+    del i ts = case find ((i ==) . todoId) ts of
+                Nothing -> ts
+                Just t -> L.delete t ts
+justTodoFns (TodoEnter n t) = Just ins
+  where
+    ins ts = case find ((n ==) . todoId) ts of
+      Nothing -> ts
+      Just x -> sort $ x { todoText = t } : L.delete x ts
+justTodoFns _ = Nothing
+
+justTodoEnterEs (TodoEnter n t) = Just (n, t)
+justTodoEnterEs _ = Nothing
+
+updateTodo :: [Todo] -> IO ()
+updateTodo ts = do
+  putStrLn $ "in updateTodo: " ++ tshow ts
+  return ()
+
 -- wildly generic event handler. call eventFn to munge the event in some way,
 -- making the result of that available to stateFn, a pure State changer
-eventHandle :: IORef State -> (Event -> IO a) -> (a -> State -> State) ->
-                Event -> IO ()
+eventHandle :: IORef State -> (J.Event -> IO a) -> (a -> State -> State) ->
+                J.Event -> IO ()
 eventHandle stateRef eventFn stateFn e = void $ do
   x <- eventFn e
   -- myThing <- select $ "<div>eventhandle: x is " ++ tshow x ++ "</div>"
@@ -176,10 +295,10 @@ initClicks stateRef = void $ do
   mapM filterClick ["all", "active", "completed"]
   s <- select "ul#todo-list"
   doOn "change" "input.toggle" eventIndex toggle s
-  doOn "dblclick" "label" eventIndex editing s
-  doOn "click" "button.destroy" eventIndex destroy s
-  doOn "focusout" "li.editing" eventIndexTextEnter keyEdit s
-  doOn "keyup" "li.editing" eventIndexTextKey keyEdit s
+  -- doOn "dblclick" "label" eventIndex editing s
+  -- doOn "click" "button.destroy" eventIndex destroy s
+  -- doOn "focusout" "li.editing" eventIndexTextEnter keyEdit s
+  -- doOn "keyup" "li.editing" eventIndexTextKey keyEdit s
   where
     -- currently handing f straight to the State changer - would it make more
     -- sense to provide an eventFn that can extract it?
