@@ -34,7 +34,7 @@ main = do
   updateBindings stateNull stateInit bindings
   updateTweaks stateNull stateInit tweaksBool
   mapM_ domAppend todos
-  initClicks stateRef
+  -- initClicks stateRef
   (addHandler, fire) <- newAddHandler
   compile (makeNetworkDescription todos addHandler) >>= actuate
   initClicks' fire
@@ -47,8 +47,12 @@ initClicks' fire = do
   -- J.on (deleteClick fire) "click" def { hsDescendantFilter = Just "button.destroy" } s
   descOn todoDoubleClick "dblclick" s "label"
   descOn todoKeyUp "keyup" s "li.editing"
+  descOn todoCheckbox "change" s "input.toggle"
+  plainOn allCheckbox "click" "input#toggle-all"
+  plainOn newKeyUp "keyup" "input#new-todo"
   -- J.on (todoDoubleClick fire) "dblclick" def { hsDescendantFilter = Just "label" } s
   where
+    plainOn fn ev x = select x >>= J.on (fn fire) ev def
     descOn fn ev x desc =
       J.on (fn fire) ev def { hsDescendantFilter = Just desc } x
 
@@ -60,12 +64,19 @@ makeNetworkDescription init h = do
   reactimate $ fmap todoStartEdit startEditEs
   let todoEnterEs = filterJustMap justTodoEnterEs e
   reactimate $ fmap todoEnter todoEnterEs
+  reactimate $ fmap todoToggle $ filterJustMap justToggleEs e
+  reactimate $ fmap allToggle $ filterJustMap justAllToggleEs e
+  reactimate $ fmap newEnter $ filterJustMap justNewEnterEs e
+  reactimate $ fmap newAbandon $ filterJustMap justNewAbandonEs e
+
   let todoFns = filterJustMap justTodoFns e
       todosB = accumB init todoFns
   todoC <- changes todosB
   reactimate' $ fmap (setSpan "bind-n-left" . tshow . todosLeft) <$> todoC
   reactimate' $ fmap (setSpan "bind-phrase-left" . todosLeftPhrase) <$> todoC
   reactimate' $ fmap (setSpan "bind-n-done" . tshow . todosDone) <$> todoC
+  reactimate' $ fmap setToggleAll <$> todoC
+  reactimate' $ fmap footer <$> todoC
   reactimate' $ fmap updateTodo <$> todoC
   where
     filterJustMap f = filterJust . fmap f
@@ -75,7 +86,9 @@ todosLeft = L.length . filter (not . todoDone)  -- XXX use a behaviour
 todosDone = L.length . filter todoDone
 todosLeftPhrase ts = (if todosLeft ts == 1 then "item" else "items") ++ " left"
 
-data XEvent = Delete Int | StartEdit Int | TodoEnter Int Text
+data XEvent = Delete Int | NewEnter | NewAbandon |
+                StartEdit Int | TodoEnter Int Text |
+                Toggle Int Bool | ToggleAll Bool
 
 deleteClick fire e = do
   i <- readMay <$> (target e >>= selectElement >>= parent >>= getAttr "n")
@@ -101,23 +114,69 @@ todoKeyUp fire e = do
         Nothing -> return ()
     _ -> return ()
 
+newKeyUp fire e = do
+  k <- which e
+  case k of
+    13 -> do
+      v <- target e >>= selectElement >>= getVal
+      fire $ NewEnter v
+    27 -> fire NewAbandon
+    _ -> return ()
+
+todoCheckbox fire e = do
+  x <- target e >>= selectElement
+  b <- is ":checked" x
+  i <- readMay <$> (parent x >>= getAttr "n")
+  case i of
+    Just j -> fire $ Toggle j b
+    Nothing -> return ()
+  
+allCheckbox fire e = do
+  r <- target e >>= selectElement >>= is ":checked"
+  fire $ ToggleAll r
+
 -- temp
 todoDelete' n = todoDelete (Todo n "" False False)
+
+newEnter t = do
+  x <- select $ tod
+
+newAbandon = void $ select newTodoSelector >>= setVal ""
 
 todoStartEdit n = do
   x <- select (todoIdSelector n)
   t <- J.find "label" x >>= getText
   void $ replaceWith (editItem n t) x
 
-todoEnter (n, t) = do
-  x <- select (todoIdSelector n)
-  void $ replaceWith (todoItem' n t False) x
+editItem i t =
+  T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
+    <li .editing n=#{i}>
+      <input .edit value=#{t}>
+  |]
 
 editItem i t =
   T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
     <li .editing n=#{i}>
       <input .edit value=#{t}>
   |]
+
+todoToggle (n, b) = do
+  x <- select $ todoIdSelector n
+  if b then void $ addClass "completed" x >>=
+                    J.find "input.toggle" >>= setProp "checked" "true"
+       else void $ removeClass "completed" x >>= 
+               J.find "input.toggle" >>= removeProp "checked"
+
+allToggle b = do
+  x <- select "ul#todo-list li"
+  if b then void $ addClass "completed" x >>=
+                    J.find "input.toggle" >>= setProp "checked" "true"
+       else void $ removeClass "completed" x >>= 
+               J.find "input.toggle" >>= removeProp "checked"
+  
+todoEnter (n, t) = do
+  x <- select (todoIdSelector n)
+  void $ replaceWith (todoItem' n t False) x
 
 todoItem' i t c =
   T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
@@ -128,6 +187,12 @@ todoItem' i t c =
       <button .destroy>
   |]
 
+justNewEnterEs (NewEnter t) = Just t
+justNewEnterEs _ = Nothing
+
+justNewEnterEs NewAbandon = Just ()
+justNewEnterEs _ = Nothing
+
 justDeleteEs (Delete n) = Just n
 justDeleteEs _ = Nothing
 
@@ -135,6 +200,13 @@ justStartEditEs (StartEdit n) = Just n
 justStartEditEs _ = Nothing
 
 justTodoFns :: XEvent -> Maybe ([Todo] -> [Todo])
+justTodoFns (Toggle n b) = Just set
+  where 
+    set ts = case find ((n ==) . todoId) ts of
+      Nothing -> ts
+      Just x -> x { todoDone = b } : L.delete x ts
+justTodoFns (ToggleAll b) = Just $ map set
+  where set t = t { todoDone = b }
 justTodoFns (Delete n) = Just $ del n
   where
     del i ts = case find ((i ==) . todoId) ts of
@@ -144,16 +216,33 @@ justTodoFns (TodoEnter n t) = Just ins
   where
     ins ts = case find ((n ==) . todoId) ts of
       Nothing -> ts
-      Just x -> sort $ x { todoText = t } : L.delete x ts
+      Just x -> x { todoText = t } : L.delete x ts
 justTodoFns _ = Nothing
 
 justTodoEnterEs (TodoEnter n t) = Just (n, t)
 justTodoEnterEs _ = Nothing
 
+justToggleEs (Toggle n b) = Just (n, b)
+justToggleEs _ = Nothing
+
+justAllToggleEs (ToggleAll b) = Just b
+justAllToggleEs _ = Nothing
+
 updateTodo :: [Todo] -> IO ()
 updateTodo ts = do
   putStrLn $ "in updateTodo: " ++ tshow ts
   return ()
+
+setToggleAll :: [Todo] -> IO ()
+setToggleAll ts = void $ select "input#toggle-all" >>=
+                      if allDone then setProp "checked" "true"
+                        else removeProp "checked"
+  where allDone = not (L.null ts) && L.null (L.filter (not . todoDone) ts)
+  
+footer :: [Todo] -> IO ()
+footer ts = void $ select footerSelector >>= hideIf noTodos
+  where noTodos = L.null ts
+        hideIf c = (if c then addClass else removeClass) "hidden"
 
 -- wildly generic event handler. call eventFn to munge the event in some way,
 -- making the result of that available to stateFn, a pure State changer
