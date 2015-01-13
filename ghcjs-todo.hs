@@ -31,26 +31,27 @@ main = do
   todos <- sort <$> initialTodos
   let stateInit = State f todos False
   stateRef <- newIORef stateInit
+  todoRef <- newIORef todos
   updateBindings stateNull stateInit bindings
   updateTweaks stateNull stateInit tweaksBool
   mapM_ domAppend todos
   -- initClicks stateRef
   (addHandler, fire) <- newAddHandler
   compile (makeNetworkDescription todos addHandler) >>= actuate
-  initClicks' fire
+  initClicks' fire todoRef
   where
     stateNull = State "" [] False
 
-initClicks' fire = do
+initClicks' fire todoRef = do
   s <- select "ul#todo-list"
   descOn deleteClick "click" s "button.destroy"
-  -- J.on (deleteClick fire) "click" def { hsDescendantFilter = Just "button.destroy" } s
   descOn todoDoubleClick "dblclick" s "label"
   descOn todoKeyUp "keyup" s "li.editing"
   descOn todoCheckbox "change" s "input.toggle"
   plainOn allCheckbox "click" "input#toggle-all"
-  plainOn newKeyUp "keyup" "input#new-todo"
-  -- J.on (todoDoubleClick fire) "dblclick" def { hsDescendantFilter = Just "label" } s
+  plainOn (newKeyUp todoRef) "keyup" "input#new-todo"
+  plainOn (clearDone) "click" "button#clear-completed"
+  newAbandon ()
   where
     plainOn fn ev x = select x >>= J.on (fn fire) ev def
     descOn fn ev x desc =
@@ -86,9 +87,9 @@ todosLeft = L.length . filter (not . todoDone)  -- XXX use a behaviour
 todosDone = L.length . filter todoDone
 todosLeftPhrase ts = (if todosLeft ts == 1 then "item" else "items") ++ " left"
 
-data XEvent = Delete Int | NewEnter | NewAbandon |
+data XEvent = Delete Int | NewEnter Todo | NewAbandon |
                 StartEdit Int | TodoEnter Int Text |
-                Toggle Int Bool | ToggleAll Bool
+                Toggle Int Bool | ToggleAll Bool | ClearDone
 
 deleteClick fire e = do
   i <- readMay <$> (target e >>= selectElement >>= parent >>= getAttr "n")
@@ -114,14 +115,30 @@ todoKeyUp fire e = do
         Nothing -> return ()
     _ -> return ()
 
-newKeyUp fire e = do
+newKeyUp todoRef fire e = do
   k <- which e
   case k of
     13 -> do
       v <- target e >>= selectElement >>= getVal
-      fire $ NewEnter v
+      t <- extCreate todoRef v
+      domAppend t
+      newAbandon ()
+      fire $ NewEnter t
     27 -> fire NewAbandon
     _ -> return ()
+
+clearDone fire _ = do
+  select "ul#todo-list li.completed" >>= detach
+  fire ClearDone
+
+extFetch todoRef = readIORef todoRef
+
+extCreate ref v = atomicModifyIORef ref create
+  where
+    create ts =
+      let m = fromMaybe 0 (maximumMay $ map todoId ts)
+          newt = Todo (m+1) v False False
+      in (newt : ts, newt)
 
 todoCheckbox fire e = do
   x <- target e >>= selectElement
@@ -138,21 +155,14 @@ allCheckbox fire e = do
 -- temp
 todoDelete' n = todoDelete (Todo n "" False False)
 
-newEnter t = do
-  x <- select $ tod
+newEnter t = return ()
 
-newAbandon = void $ select newTodoSelector >>= setVal ""
+newAbandon _ = void $ select newTodoSelector >>= setVal ""
 
 todoStartEdit n = do
   x <- select (todoIdSelector n)
   t <- J.find "label" x >>= getText
   void $ replaceWith (editItem n t) x
-
-editItem i t =
-  T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
-    <li .editing n=#{i}>
-      <input .edit value=#{t}>
-  |]
 
 editItem i t =
   T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
@@ -176,9 +186,9 @@ allToggle b = do
   
 todoEnter (n, t) = do
   x <- select (todoIdSelector n)
-  void $ replaceWith (todoItem' n t False) x
+  void $ replaceWith (todoItem' (Todo n t False False)) x
 
-todoItem' i t c =
+todoItem' (Todo i t c _) =
   T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
     <li :c:.completed n=#{i}>
       <input .toggle type=checkbox :c:checked>
@@ -187,11 +197,14 @@ todoItem' i t c =
       <button .destroy>
   |]
 
-justNewEnterEs (NewEnter t) = Just t
+-- ooh! if we make all of them return a value of Maybe XEvent, can we
+-- generalize into a single function called with the data constructor as an
+-- argument?
+justNewEnterEs x@(NewEnter _) = Just x
 justNewEnterEs _ = Nothing
 
-justNewEnterEs NewAbandon = Just ()
-justNewEnterEs _ = Nothing
+justNewAbandonEs NewAbandon = Just ()
+justNewAbandonEs _ = Nothing
 
 justDeleteEs (Delete n) = Just n
 justDeleteEs _ = Nothing
@@ -217,6 +230,8 @@ justTodoFns (TodoEnter n t) = Just ins
     ins ts = case find ((n ==) . todoId) ts of
       Nothing -> ts
       Just x -> x { todoText = t } : L.delete x ts
+justTodoFns (NewEnter t) = Just (t :)
+justTodoFns ClearDone = Just $ filter (not . todoDone)
 justTodoFns _ = Nothing
 
 justTodoEnterEs (TodoEnter n t) = Just (n, t)
