@@ -78,6 +78,7 @@ makeNetworkDescription init h = do
   reactimate' $ fmap (setSpan "bind-n-done" . tshow . todosDone) <$> todoC
   reactimate' $ fmap setToggleAll <$> todoC
   reactimate' $ fmap footer <$> todoC
+  reactimate' $ fmap clearDoneButton <$> todoC
   reactimate' $ fmap updateTodo <$> todoC
   where
     filterJustMap f = filterJust . fmap f
@@ -257,7 +258,12 @@ setToggleAll ts = void $ select "input#toggle-all" >>=
 footer :: [Todo] -> IO ()
 footer ts = void $ select footerSelector >>= hideIf noTodos
   where noTodos = L.null ts
-        hideIf c = (if c then addClass else removeClass) "hidden"
+
+hideIf c = (if c then addClass else removeClass) "hidden"
+
+clearDoneButton :: [Todo] -> IO ()
+clearDoneButton ts = void $ select "button#clear-completed" >>= hideIf noneDone
+  where noneDone = L.null $ L.filter todoDone ts
 
 -- wildly generic event handler. call eventFn to munge the event in some way,
 -- making the result of that available to stateFn, a pure State changer
