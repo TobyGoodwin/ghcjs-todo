@@ -35,12 +35,16 @@ main = do
   updateBindings stateNull stateInit bindings
   updateTweaks stateNull stateInit tweaksBool
   mapM_ domAppend todos
+  newFilter (NewFilter f)
   -- initClicks stateRef
   (addHandler, fire) <- newAddHandler
   compile (makeNetworkDescription todos addHandler) >>= actuate
   initClicks' fire todoRef
   where
     stateNull = State "" [] False
+
+filters :: [Text]
+filters = ["all", "active", "completed"]
 
 initClicks' fire todoRef = do
   s <- select "ul#todo-list"
@@ -51,11 +55,14 @@ initClicks' fire todoRef = do
   plainOn allCheckbox "click" "input#toggle-all"
   plainOn (newKeyUp todoRef) "keyup" "input#new-todo"
   plainOn (clearDone) "click" "button#clear-completed"
+  mapM filterOn filters
   newAbandon ()
   where
-    plainOn fn ev x = select x >>= J.on (fn fire) ev def
+    plainOn fn ev x = void $ select x >>= J.on (fn fire) ev def
     descOn fn ev x desc =
       J.on (fn fire) ev def { hsDescendantFilter = Just desc } x
+    filterOn :: Text -> IO ()
+    filterOn f = plainOn (filterClick f) "click" (filterSelector f)
 
 makeNetworkDescription init h = do
   e <- fromAddHandler h
@@ -69,6 +76,7 @@ makeNetworkDescription init h = do
   reactimate $ fmap allToggle $ filterJustMap justAllToggleEs e
   reactimate $ fmap newEnter $ filterJustMap justNewEnterEs e
   reactimate $ fmap newAbandon $ filterJustMap justNewAbandonEs e
+  reactimate $ fmap newFilter $ filterJustMap justNewFilterEs e
 
   let todoFns = filterJustMap justTodoFns e
       todosB = accumB init todoFns
@@ -90,7 +98,8 @@ todosLeftPhrase ts = (if todosLeft ts == 1 then "item" else "items") ++ " left"
 
 data XEvent = Delete Int | NewEnter Todo | NewAbandon |
                 StartEdit Int | TodoEnter Int Text |
-                Toggle Int Bool | ToggleAll Bool | ClearDone
+                Toggle Int Bool | ToggleAll Bool | ClearDone |
+                NewFilter Text
 
 deleteClick fire e = do
   i <- readMay <$> (target e >>= selectElement >>= parent >>= getAttr "n")
@@ -122,8 +131,6 @@ newKeyUp todoRef fire e = do
     13 -> do
       v <- target e >>= selectElement >>= getVal
       t <- extCreate todoRef v
-      domAppend t
-      newAbandon ()
       fire $ NewEnter t
     27 -> fire NewAbandon
     _ -> return ()
@@ -131,6 +138,8 @@ newKeyUp todoRef fire e = do
 clearDone fire _ = do
   select "ul#todo-list li.completed" >>= detach
   fire ClearDone
+
+filterClick f fire _ = fire $ NewFilter f
 
 extFetch todoRef = readIORef todoRef
 
@@ -156,9 +165,32 @@ allCheckbox fire e = do
 -- temp
 todoDelete' n = todoDelete (Todo n "" False False)
 
-newEnter t = return ()
+newEnter (NewEnter t) = do
+  h <- T.pack . fromJSString <$> windowLocationHash
+  let f = if T.null h then "all" else T.drop 1 h
+  print $ "in newEnter, f is " ++ show f
+  domAppendHide t (f == "completed")
+  newAbandon ()
+  return ()
 
 newAbandon _ = void $ select newTodoSelector >>= setVal ""
+
+newFilter (NewFilter f) = do
+  setFilter f
+  case f of
+    "active" -> do
+      void $ select "ul#todo-list li.completed" >>= addClass "hidden"
+      void $ select "ul#todo-list li:not(.completed)" >>= removeClass "hidden"
+    "completed" -> do
+      void $ select "ul#todo-list li.completed" >>= removeClass "hidden"
+      void $ select "ul#todo-list li:not(.completed)" >>= addClass "hidden"
+    _ -> void $ select "ul#todo-list li" >>= removeClass "hidden"
+
+setFilter f = do
+  select (filterSelector f) >>= addClass "selected"
+  mapM_ deselect (L.delete f filters)
+  where
+    deselect g = void $ select (filterSelector g) >>= removeClass "selected"
 
 todoStartEdit n = do
   x <- select (todoIdSelector n)
@@ -191,7 +223,7 @@ todoEnter (n, t) = do
 
 todoItem' (Todo i t c _) =
   T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
-    <li :c:.completed n=#{i}>
+    <li .new :c:.completed n=#{i}>
       <input .toggle type=checkbox :c:checked>
       <label>
         #{t}
@@ -206,6 +238,9 @@ justNewEnterEs _ = Nothing
 
 justNewAbandonEs NewAbandon = Just ()
 justNewAbandonEs _ = Nothing
+
+justNewFilterEs x@(NewFilter _) = Just x
+justNewFilterEs _ = Nothing
 
 justDeleteEs (Delete n) = Just n
 justDeleteEs _ = Nothing
@@ -359,8 +394,14 @@ todoAppend item = do
 
 domAppend :: Todo -> IO ()
 domAppend item = do
-  x <- select $ todoItem item
+  x <- select $ todoItem' item
   void $ select "#todo-list" >>= appendJQuery x
+
+domAppendHide :: Todo -> Bool -> IO ()
+domAppendHide item hide = do
+  x <- select $ todoItem' item
+  t <- select "#todo-list" >>= appendJQuery x
+  when hide $ void $ J.find "li:last" t >>= addClass "hidden"
 
 todoInsert :: Todo -> Todo -> IO ()
 todoInsert item b = void $ select (todoSelector b) >>= before (todoItem item)
