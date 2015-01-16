@@ -54,6 +54,7 @@ initClicks' fire todoRef = do
   descOn todoCheckbox "change" s "input.toggle"
   plainOn allCheckbox "click" "input#toggle-all"
   plainOn (newKeyUp todoRef) "keyup" "input#new-todo"
+  plainOn (newBlur todoRef) "focusout" "input#new-todo"
   plainOn (clearDone) "click" "button#clear-completed"
   mapM filterOn filters
   newAbandon ()
@@ -128,12 +129,15 @@ todoKeyUp fire e = do
 newKeyUp todoRef fire e = do
   k <- which e
   case k of
-    13 -> do
-      v <- target e >>= selectElement >>= getVal
-      t <- extCreate todoRef v
-      fire $ NewEnter t
+    13 -> newBlur todoRef fire e
     27 -> fire NewAbandon
     _ -> return ()
+
+newBlur todoRef fire e = do
+  v <- target e >>= selectElement >>= getVal
+  when (not $ T.null v) $ do
+    t <- extCreate todoRef v
+    fire $ NewEnter t
 
 clearDone fire _ = do
   select "ul#todo-list li.completed" >>= detach
@@ -209,6 +213,10 @@ todoToggle (n, b) = do
                     J.find "input.toggle" >>= setProp "checked" "true"
        else void $ removeClass "completed" x >>= 
                J.find "input.toggle" >>= removeProp "checked"
+  h <- T.pack . fromJSString <$> windowLocationHash
+  let f = if T.null h then "all" else T.drop 1 h
+  when (b && f == "active") $ void $ addClass "hidden" x
+  when (not b && f == "completed") $ void $ addClass "hidden" x
 
 allToggle b = do
   x <- select "ul#todo-list li"
