@@ -29,6 +29,7 @@ main :: IO ()
 main = do
   todoRef <- extInit
   todos <- extFetch todoRef
+  domListUpdate todos
   mapM_ domAppend todos
   f <- filterFromLocation
   newFilter (Filter f)
@@ -65,40 +66,13 @@ initJEvents fire todoRef = do
 -- the banana network
 makeNetworkDescription init h = do
   e <- fromAddHandler h
-  -- let deleteEs = filterJustMap justDeleteEs e
-  -- reactimate $ fmap todoDelete deleteEs
-  -- let startEditEs = filterJustMap justStartEditEs e
-  -- reactimate $ fmap todoStartEdit startEditEs
-  -- let todoEnterEs = filterJustMap justTodoEnterEs e
-  -- reactimate $ fmap todoEnter todoEnterEs
-  -- reactimate $ fmap todoToggle $ filterJustMap justToggleEs e
-  -- reactimate $ fmap allToggle $ filterJustMap justAllToggleEs e
-  -- reactimate $ fmap newEnter $ filterJustMap justNewEnterEs e
-  -- reactimate $ fmap newAbandon $ filterJustMap justNewAbandonEs e
-  -- reactimate $ fmap newFilter $ filterJustMap justNewFilterEs e
-  -- rather than having 17 dozen reanimate calls, let's have just one that
-  -- updates the DOM (and another that updates the external model?)
-  -- no filter needed here: every event is a DOM event
   reactimate $ fmap domUpdate e
 
-  let todoFns = filterJustMap justTodoFns e
+  let todoFns = filterJust $ fmap justTodoFns e
       todosB = accumB init todoFns
   todoC <- changes todosB
-  -- can't we use a single function to do all this?
-  reactimate' $ fmap (setSpan "bind-n-left" . tshow . todosLeft) <$> todoC
-  reactimate' $ fmap (setSpan "bind-phrase-left" . todosLeftPhrase) <$> todoC
-  reactimate' $ fmap (setSpan "bind-n-done" . tshow . todosDone) <$> todoC
-  reactimate' $ fmap setToggleAll <$> todoC
-  reactimate' $ fmap footer <$> todoC
-  reactimate' $ fmap clearDoneButton <$> todoC
-  reactimate' $ fmap updateTodo <$> todoC
-  where
-    filterJustMap f = filterJust . fmap f
-    setSpan x y = void $ select ("#" ++ x) >>= setText y
+  reactimate' $ fmap domListUpdate <$> todoC
 
-todosLeft = L.length . filter (not . todoDone)  -- XXX use a behaviour
-todosDone = L.length . filter todoDone
-todosLeftPhrase ts = (if todosLeft ts == 1 then "item" else "items") ++ " left"
 
 -- reactive events
 data REvent = AllToggle Bool | NewEnter Todo | NewAbandon |
@@ -148,17 +122,6 @@ allCheckbox fire e =
 
 -- the reactive output functions
 
--- todoDelete (Delete n) = domIndexDelete n
-
-{-
-newEnter (NewEnter t) = do
-  f <- filterFromLocation
-  domAppendHide t (f == "completed")
-  newClear
-  -}
-
--- newAbandon _ = newClear
-
 newClear = void $ select newTodoSelector >>= setVal ""
 
 domUpdate (AllToggle b) =
@@ -195,7 +158,21 @@ domUpdate (Filter f) = do
     notDone = todoItemsSelector ":not(.completed)"
     all = todoItemsSelector ""
 domUpdate DoneClear = void $ select (todoItemsSelector ".completed") >>= detach
--- domUpdate _ = return ()
+
+domListUpdate ts = do
+  setSpan "bind-n-left" $ tshow todosLeft
+  setSpan "bind-phrase-left" todosLeftPhrase
+  setSpan "bind-n-done" $ tshow todosDone
+  setToggleAll ts
+  footer ts
+  clearDoneButton ts
+  updateTodo ts
+  where
+    setSpan x y = void $ select ("#" ++ x) >>= setText y
+    todosLeft = L.length $ filter (not . todoDone) ts
+    todosDone = L.length $ filter todoDone ts
+    todosLeftPhrase =
+      (if todosLeft == 1 then "item" else "items") ++ " left"
 
 newFilter (Filter f) = do
   setFilter f
@@ -214,10 +191,14 @@ setFilter f = do
   where
     deselect g = void $ select (filterSelector g) >>= removeClass "selected"
 
--- todoStartEdit (StartEdit n) = do
---   x <- select (todoIdSelector n)
---   t <- J.find "label" x >>= getText
---   void $ replaceWith (editItem n t) x
+todoItem (Todo i t c) =
+  T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
+    <li .new :c:.completed n=#{i}>
+      <input .toggle type=checkbox :c:checked>
+      <label>
+        #{t}
+      <button .destroy>
+  |]
 
 editItem i t =
   T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
@@ -231,82 +212,26 @@ setDoneSelection b x = do
        else void $ removeClass "completed" x >>= 
                J.find "input.toggle" >>= removeProp "checked"
 
--- todoToggle (Toggle b n) = do
---   x <- select $ todoIdSelector n
---   setDoneSelection b x
---   h <- T.pack . fromJSString <$> windowLocationHash
---   let f = if T.null h then "all" else T.drop 1 h
---   when (b && f == "active") $ void $ addClass "hidden" x
---   when (not b && f == "completed") $ void $ addClass "hidden" x
-
--- allToggle (ToggleAll b) = setDoneSelection b =<< select (todoItemsSelector "")
-  
--- todoEnter (TodoEnter t n) = do
---   x <- select (todoIdSelector n)
---   void $ replaceWith (todoItem $ Todo n t False) x
-
-todoItem (Todo i t c) =
-  T.concat $ LT.toChunks $ renderHtml [shamlet|$newline always
-    <li .new :c:.completed n=#{i}>
-      <input .toggle type=checkbox :c:checked>
-      <label>
-        #{t}
-      <button .destroy>
-  |]
-
--- I'd like to generalize the following event selection functions, but don't
--- know how: a constructor is just a function, but we for a pattern match we
--- need a constant. (Probably there's a GHC extension that can do it.)
--- justNewEnterEs x@(NewEnter _) = Just x
--- justNewEnterEs _ = Nothing
-
--- justNewAbandonEs NewAbandon = Just NewAbandon
--- justNewAbandonEs _ = Nothing
-
--- justNewFilterEs x@(NewFilter _) = Just x
--- justNewFilterEs _ = Nothing
-
--- a new strategy?
--- justDomEvents xClearDone = Just ClearDone
--- justDomEvents ClearDone = Just ClearDone
--- justDomEvents _ = Nothing
-
--- justDeleteEs x@(Delete _) = Just x
--- justDeleteEs _ = Nothing
-
--- justStartEditEs x@(StartEdit n) = Just x
--- justStartEditEs _ = Nothing
-
--- justTodoEnterEs x@(TodoEnter _ _) = Just x
--- justTodoEnterEs _ = Nothing
-
--- justToggleEs x@(Toggle _ _) = Just x
--- justToggleEs _ = Nothing
-
--- justAllToggleEs x@(ToggleAll b) = Just x
--- justAllToggleEs _ = Nothing
-
 justTodoFns :: REvent -> Maybe ([Todo] -> [Todo])
-justTodoFns (Toggle b n) = Just set
+justTodoFns (Toggle b n) = Just $ todoIndexHelper set n
   where 
-    set ts = case find ((n ==) . todoId) ts of
-      Nothing -> ts
-      Just x -> x { todoDone = b } : L.delete x ts
+    set x ts = x { todoDone = b } : L.delete x ts
 justTodoFns (AllToggle b) = Just $ map set
   where set t = t { todoDone = b }
-justTodoFns (Delete n) = Just $ del n
+justTodoFns (Delete n) = Just $ todoIndexHelper del n
   where
-    del i ts = case find ((i ==) . todoId) ts of
-                Nothing -> ts
-                Just t -> L.delete t ts
-justTodoFns (Enter t n) = Just ins
+    del x ts = L.delete x ts
+justTodoFns (Enter t n) = Just $ todoIndexHelper ins n
   where
-    ins ts = case find ((n ==) . todoId) ts of
-      Nothing -> ts
-      Just x -> x { todoText = t } : L.delete x ts
+    ins x ts = x { todoText = t } : L.delete x ts
 justTodoFns (NewEnter t) = Just (t :)
 justTodoFns DoneClear = Just $ filter (not . todoDone)
 justTodoFns _ = Nothing
+
+todoIndexHelper f n ts = 
+  case find ((n ==) . todoId) ts of
+    Nothing -> ts
+    Just x -> f x ts
 
 updateTodo :: [Todo] -> IO ()
 updateTodo ts = do
