@@ -66,35 +66,59 @@ initJEvents fire todoRef = do
 -- the banana network
 makeNetworkDescription init h = do
   e <- fromAddHandler h
-  reactimate $ fmap domUpdate e
+  -- reactimate $ fmap domUpdate e
 
   let todoFns = filterJust $ fmap justTodoFns e
       todosB = accumB init todoFns
   todoC <- changes todosB
   reactimate' $ fmap domListUpdate <$> todoC
 
-  -- let todosE = todosB <@ todoC
-  -- reactimate $ fmap checkIt todosE
-
-  -- ok, so this actually works, although i still don't think it's useful
-  -- first we mutate e into the magical Future thingy, by creating a behaviour
-  -- that holds the last event, and then applying changes to that
-  -- then we union this new events stream with the changes events of the todo
-  -- list, using Either to glue them together
-  -- and that's something that we can hand to reanimate
-  let h = accumB NewAbandon $ fmap const e
-  i <- changes h
-  let g = RB.union (fmap Left <$> i) (fmap Right <$> todoC)
-  -- reactimate' $ fmap checkIt <$> g
-  -- let todosF = (,) <$> todosB <@> e
-  -- reactimate $ fmap checkIt todosE
-  --
-  let k = fmap (\x y -> (x,y)) todosB
+  -- build a behaviour that is a function pairing the todos list with its
+  -- argument, then apply that to the stream of events: result is a stream of
+  -- events with type ([Todo], REvent). 
+  let k = fmap (,) todosB
       l = apply k e
   reactimate $ fmap checkIt l
+  reactimate $ fmap update2 l
   return ()
   where
     checkIt x = putStrLn $ "checkit: " ++ tshow x
+
+update2 (ts, AllToggle b) =
+  void $ select (todoItemsSelector "") >>= setDoneSelection b
+update2 (ts, NewEnter t) = do
+  f <- filterFromLocation
+  domAppendHide t (f == "completed")
+  newClear
+update2 (_, NewAbandon) = newClear
+update2 (ts, Toggle b n) = do
+  x <- select $ todoIdSelector n
+  setDoneSelection b x
+  h <- T.pack . fromJSString <$> windowLocationHash
+  let f = if T.null h then "all" else T.drop 1 h
+  when (b && f == "active") $ void $ addClass "hidden" x
+  when (not b && f == "completed") $ void $ addClass "hidden" x
+update2 (ts, Edit n) = do
+  x <- select (todoIdSelector n)
+  t <- J.find "label" x >>= getText
+  void $ replaceWith (editItem n t) x
+update2 (ts, Enter t n) = do
+  x <- select (todoIdSelector n)
+  case find ((n ==) . todoId) ts of
+    Just o -> void $ replaceWith (todoItem $ o { todoText = t }) x
+    Nothing -> return ()
+update2 (ts, Delete n) = domIndexDelete n
+update2 (ts, Filter f) = do
+  setFilter f
+  case f of
+    "active" -> hide done >> reveal notDone
+    "completed" -> hide notDone >> reveal done
+    _ -> reveal all
+  where
+    done = todoItemsSelector ".completed"
+    notDone = todoItemsSelector ":not(.completed)"
+    all = todoItemsSelector ""
+update2 (ts, DoneClear) = void $ select (todoItemsSelector ".completed") >>= detach
 
 
 -- reactive events
@@ -189,7 +213,7 @@ domListUpdate ts = do
   setToggleAll ts
   footer ts
   clearDoneButton ts
-  updateTodo ts
+  -- updateTodo ts
   where
     setSpan x y = void $ select ("#" ++ x) >>= setText y
     todosLeft = L.length $ filter (not . todoDone) ts
