@@ -85,9 +85,13 @@ makeNetworkDescription init h = do
   let h = accumB NewAbandon $ fmap const e
   i <- changes h
   let g = RB.union (fmap Left <$> i) (fmap Right <$> todoC)
-  reactimate' $ fmap checkIt <$> g
+  -- reactimate' $ fmap checkIt <$> g
   -- let todosF = (,) <$> todosB <@> e
   -- reactimate $ fmap checkIt todosE
+  --
+  let k = fmap (\x y -> (x,y)) todosB
+      l = apply k e
+  reactimate $ fmap checkIt l
   return ()
   where
     checkIt x = putStrLn $ "checkit: " ++ tshow x
