@@ -15,7 +15,7 @@ import GHCJS.Prim (fromJSString, toJSString)
 import GHCJS.Types (JSString)
 import JavaScript.JQuery hiding (Event, filter, find, last, not, on)
 import qualified JavaScript.JQuery as J
-import Reactive.Banana
+import Reactive.Banana as RB
 import Reactive.Banana.Frameworks
 import Text.Blaze.Html.Renderer.Text (renderHtml)
 import Text.Hamlet (shamlet)
@@ -73,11 +73,30 @@ makeNetworkDescription init h = do
   todoC <- changes todosB
   reactimate' $ fmap domListUpdate <$> todoC
 
+  -- let todosE = todosB <@ todoC
+  -- reactimate $ fmap checkIt todosE
+
+  -- ok, so this actually works, although i still don't think it's useful
+  -- first we mutate e into the magical Future thingy, by creating a behaviour
+  -- that holds the last event, and then applying changes to that
+  -- then we union this new events stream with the changes events of the todo
+  -- list, using Either to glue them together
+  -- and that's something that we can hand to reanimate
+  let h = accumB NewAbandon $ fmap const e
+  i <- changes h
+  let g = RB.union (fmap Left <$> i) (fmap Right <$> todoC)
+  reactimate' $ fmap checkIt <$> g
+  -- let todosF = (,) <$> todosB <@> e
+  -- reactimate $ fmap checkIt todosE
+  return ()
+  where
+    checkIt x = putStrLn $ "checkit: " ++ tshow x
+
 
 -- reactive events
 data REvent = AllToggle Bool | NewEnter Todo | NewAbandon |
                 Toggle Bool Int | Edit Int | Enter Text Int | Delete Int |
-                Filter Text | DoneClear
+                Filter Text | DoneClear deriving Show
 
 -- the javascript event handlers: these fire REvents
 
