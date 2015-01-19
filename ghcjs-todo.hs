@@ -73,6 +73,8 @@ makeNetworkDescription init h = do
   todoC <- changes todosB
   reactimate' $ fmap domListUpdate <$> todoC
 
+  let filterB = stepper "foo" $ filterJust $ fmap justFilterEs e
+
   -- build a behaviour that is a function pairing the todos list with its
   -- argument, then apply that to the stream of events: result is a stream of
   -- events with type ([Todo], REvent). 
@@ -82,7 +84,7 @@ makeNetworkDescription init h = do
 
   -- what about a second behaviour? such as the current filter?
   let m = fmap (,) todosB
-      n = m <*> todosB
+      n = m <*> filterB
       o = fmap (\(x,y) -> (,,) x y) n
       p = apply o e
   reactimate $ fmap checkIt p
@@ -280,6 +282,9 @@ justTodoFns (Enter t n) = Just $ todoIndexHelper ins n
 justTodoFns (NewEnter t) = Just (t :)
 justTodoFns DoneClear = Just $ filter (not . todoDone)
 justTodoFns _ = Nothing
+
+justFilterEs (Filter x) = Just x
+justFilterEs _ = Nothing
 
 todoIndexHelper f n ts = 
   case find ((n ==) . todoId) ts of
