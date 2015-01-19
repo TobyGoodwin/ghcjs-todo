@@ -29,12 +29,12 @@ main :: IO ()
 main = do
   todoRef <- extInit
   todos <- extFetch todoRef
-  domListUpdate todos
+  bindings todos
   mapM_ domAppend todos
   f <- filterFromLocation
   newFilter (Filter f)
   (addHandler, fire) <- newAddHandler
-  compile (makeNetworkDescription todos addHandler) >>= actuate
+  compile (makeNetworkDescription todos f addHandler) >>= actuate
   initJEvents fire todoRef
 
 filters :: [Text]
@@ -64,61 +64,62 @@ initJEvents fire todoRef = do
     filterOn f = plainOn (filterClick f) "click" (filterSelector f)
 
 -- the banana network
-makeNetworkDescription init h = do
+makeNetworkDescription initTodos initFilter h = do
   e <- fromAddHandler h
-  -- reactimate $ fmap domUpdate e
 
+  -- behaviour for the Todo list
   let todoFns = filterJust $ fmap justTodoFns e
-      todosB = accumB init todoFns
-  todoC <- changes todosB
-  reactimate' $ fmap domListUpdate <$> todoC
+      todosB = accumB initTodos todoFns
 
-  let filterB = stepper "foo" $ filterJust $ fmap justFilterEs e
+  -- behaviour for the filter
+  let filterB = stepper initFilter $ filterJust $ fmap justFilterEs e
 
-  -- build a behaviour that is a function pairing the todos list with its
-  -- argument, then apply that to the stream of events: result is a stream of
-  -- events with type ([Todo], REvent). 
-  let k = fmap (,) todosB
-      l = apply k e
-  reactimate $ fmap update2 l
+  -- combine the Todo list and filter behaviours with the event stream
+  let tevents = TEvent <$> todosB <*> filterB <@> e
+  reactimate $ fmap update tevents
 
-  -- what about a second behaviour? such as the current filter?
-  let m = fmap (,) todosB
-      n = m <*> filterB
-      o = fmap (\(x,y) -> (,,) x y) n
-      p = apply o e
-  reactimate $ fmap checkIt p
-  return ()
+  -- monitor changes to the Todo list behaviour; update bindings
+  todosC <- changes todosB
+  reactimate' $ fmap bindings <$> todosC
+
+update (TEvent ts f (AllToggle b)) = do
+  let us = filter ((b /= ) . todoDone) ts
+  mapM_ toggle us
   where
-    checkIt x = putStrLn $ "checkit: " ++ tshow x
+    toggle t = do
+      x <- select $ todoSelector t
+      setDoneSelection b x
+      hideOrReveal f (not b) b x
 
-update2 (ts, AllToggle b) =
-  void $ select (todoItemsSelector "") >>= setDoneSelection b
-update2 (ts, NewEnter t) = do
-  f <- filterFromLocation
+update (TEvent _ f (NewEnter t)) = do
   domAppendHide t (f == "completed")
   newClear
-update2 (_, NewAbandon) = newClear
-update2 (ts, Toggle b n) = do
+
+update (TEvent _ _ NewAbandon) = newClear
+
+update (TEvent ts f (Toggle b n)) = do
   x <- select $ todoIdSelector n
   setDoneSelection b x
-  h <- T.pack . fromJSString <$> windowLocationHash
-  let f = if T.null h then "all" else T.drop 1 h
-  when (b && f == "active") $ void $ addClass "hidden" x
-  when (not b && f == "completed") $ void $ addClass "hidden" x
-update2 (ts, Edit n) = do
-  x <- select (todoIdSelector n)
-  t <- J.find "label" x >>= getText
-  void $ replaceWith (editItem n t) x
-update2 (ts, Enter t n) = do
-  x <- select (todoIdSelector n)
-  case find ((n ==) . todoId) ts of
-    Just o -> void $ replaceWith (todoItem $ o { todoText = t }) x
+  hideOrReveal f (not b) b x
+
+update (TEvent ts _ (Edit i)) =
+  case find ((i ==) . todoId) ts of
+    Just j -> do
+      x <- select (todoIdSelector i)
+      void $ replaceWith (editItem i (todoText j)) x
     Nothing -> return ()
-update2 (ts, Delete n) = domIndexDelete n
-update2 (ts, Filter f) = do
-  setFilter f
-  case f of
+
+update (TEvent ts _ (Enter t i)) = do
+  x <- select (todoIdSelector i)
+  case find ((i ==) . todoId) ts of
+    Just j -> void $ replaceWith (todoItem $ j { todoText = t }) x
+    Nothing -> return ()
+
+update (TEvent ts _ (Delete n)) = domIndexDelete n
+
+update (TEvent ts oldf (Filter newf)) = do
+  setFilter newf
+  case newf of
     "active" -> hide done >> reveal notDone
     "completed" -> hide notDone >> reveal done
     _ -> reveal all
@@ -126,13 +127,18 @@ update2 (ts, Filter f) = do
     done = todoItemsSelector ".completed"
     notDone = todoItemsSelector ":not(.completed)"
     all = todoItemsSelector ""
-update2 (ts, DoneClear) = void $ select (todoItemsSelector ".completed") >>= detach
+
+update (TEvent ts _ DoneClear) =
+  void $ select (todoItemsSelector ".completed") >>= detach
 
 
 -- reactive events
 data REvent = AllToggle Bool | NewEnter Todo | NewAbandon |
                 Toggle Bool Int | Edit Int | Enter Text Int | Delete Int |
                 Filter Text | DoneClear deriving Show
+
+-- triple consisting of a Todo list, the current filter, and an REvent
+data TEvent = TEvent [Todo] Text REvent deriving Show
 
 -- the javascript event handlers: these fire REvents
 
@@ -214,20 +220,25 @@ domUpdate (Filter f) = do
     all = todoItemsSelector ""
 domUpdate DoneClear = void $ select (todoItemsSelector ".completed") >>= detach
 
-domListUpdate ts = do
+bindings ts = do
   setSpan "bind-n-left" $ tshow todosLeft
   setSpan "bind-phrase-left" todosLeftPhrase
   setSpan "bind-n-done" $ tshow todosDone
   setToggleAll ts
-  footer ts
+  hideIf (todos == 0) footerSelector
+  hideIf (todosDone == 0) buttonClearSelector
+  hideIf (todos == 0) toggleAllSelector
   clearDoneButton ts
-  -- updateTodo ts
   where
     setSpan x y = void $ select ("#" ++ x) >>= setText y
-    todosLeft = L.length $ filter (not . todoDone) ts
+    todos = L.length ts
     todosDone = L.length $ filter todoDone ts
-    todosLeftPhrase =
-      (if todosLeft == 1 then "item" else "items") ++ " left"
+    todosLeft = todos - todosDone
+    todosLeftPhrase = (if todosLeft == 1 then "item" else "items") ++ " left"
+    setToggleAll ts = void $ select "input#toggle-all" >>=
+                        if allDone then setProp "checked" "true"
+                          else removeProp "checked"
+    allDone = todos /= 0 && todosLeft == 0
 
 newFilter (Filter f) = do
   setFilter f
@@ -301,7 +312,7 @@ setToggleAll ts = void $ select "input#toggle-all" >>=
                       if allDone then setProp "checked" "true"
                         else removeProp "checked"
   where allDone = not (L.null ts) && L.null (L.filter (not . todoDone) ts)
-  
+
 footer :: [Todo] -> IO ()
 footer ts = hideIf noTodos footerSelector
   where noTodos = L.null ts
@@ -311,21 +322,32 @@ clearDoneButton ts = hideIf noneDone buttonClearSelector
   where noneDone = L.null $ L.filter todoDone ts
 
 reveal :: Text -> IO ()
-reveal j = void $ select j >>= removeClass "hidden"
+reveal t = select t >>= jReveal
+
+jReveal :: JQuery -> IO ()
+jReveal = void . removeClass "hidden"
 
 hide :: Text -> IO ()
-hide j = void $ select j >>= addClass "hidden"
+hide t = select t >>= jHide
+
+jHide :: JQuery -> IO ()
+jHide = void . addClass "hidden"
 
 hideIf c j = (if c then hide else reveal) j
 
 filterSelector :: Text -> Text
 filterSelector = ("a#filter-" ++)
 
+todoSelector :: Todo -> Text
+todoSelector = todoIdSelector . todoId
+
 todoIdSelector :: TodoId -> Text
 todoIdSelector i = todoItemsSelector $ "[n='" ++ tshow i ++ "']"
 
 todoListSelector = "ul#todo-list" :: Text
 todoItemsSelector x = todoListSelector ++ " li" ++ x
+
+toggleAllSelector = "input#toggle-all" :: Text
 buttonClearSelector = "button#clear-completed" :: Text
 footerSelector = "footer#footer" :: Text
 newTodoSelector = "input#new-todo" :: Text
@@ -369,3 +391,13 @@ extCreate ref v = atomicModifyIORef ref create
       let m = fromMaybe 0 (maximumMay $ map todoId ts)
           newt = Todo (m+1) v False
       in (newt : ts, newt)
+
+-- given a filter, a previous state of the "done" flag, the current state
+-- of the flag, and a selection, hide or reveal the selection as necessary
+hideOrReveal f old new j = do
+  when (filterHelper f old /= filterHelper f new) $
+      if filterHelper f new then jReveal j else jHide j
+  where
+    filterHelper "all" = const True
+    filterHelper "active" = not
+    filterHelper "completed" = id
