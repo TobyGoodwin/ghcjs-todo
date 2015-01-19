@@ -78,8 +78,14 @@ makeNetworkDescription init h = do
   -- events with type ([Todo], REvent). 
   let k = fmap (,) todosB
       l = apply k e
-  reactimate $ fmap checkIt l
   reactimate $ fmap update2 l
+
+  -- what about a second behaviour? such as the current filter?
+  let m = fmap (,) todosB
+      n = m <*> todosB
+      o = fmap (\(x,y) -> (,,) x y) n
+      p = apply o e
+  reactimate $ fmap checkIt p
   return ()
   where
     checkIt x = putStrLn $ "checkit: " ++ tshow x
