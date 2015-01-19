@@ -84,12 +84,7 @@ makeNetworkDescription initTodos initFilter h = do
 
 update (TEvent ts f (AllToggle b)) = do
   let us = filter ((b /= ) . todoDone) ts
-  mapM_ toggle us
-  where
-    toggle t = do
-      x <- select $ todoSelector t
-      setDoneSelection b x
-      hideOrReveal f (not b) b x
+  mapM_ (toggle f b . todoId) us
 
 update (TEvent _ f (NewEnter t)) = do
   domAppendHide t (f == "completed")
@@ -97,10 +92,7 @@ update (TEvent _ f (NewEnter t)) = do
 
 update (TEvent _ _ NewAbandon) = newClear
 
-update (TEvent ts f (Toggle b n)) = do
-  x <- select $ todoIdSelector n
-  setDoneSelection b x
-  hideOrReveal f (not b) b x
+update (TEvent ts f (Toggle b n)) = toggle f b n
 
 update (TEvent ts _ (Edit i)) =
   case find ((i ==) . todoId) ts of
@@ -131,6 +123,16 @@ update (TEvent ts oldf (Filter newf)) = do
 update (TEvent ts _ DoneClear) =
   void $ select (todoItemsSelector ".completed") >>= detach
 
+toggle f b n = do
+  x <- select $ todoIdSelector n
+  setDoneSelection b x
+  -- this won't actually work for the IORef external model, because we don't
+  -- have the IORef at this point! it could be passed all the way down through
+  -- the reactive network, I guess, or possibly I could use Reader. or I could
+  -- just ignore the problem: the IORef external model got my head in order, i
+  -- don't actually have to make it work
+  -- extSetDone n b
+  hideOrReveal f (not b) b x
 
 -- reactive events
 data REvent = AllToggle Bool | NewEnter Todo | NewAbandon |
@@ -185,41 +187,6 @@ allCheckbox fire e =
 
 newClear = void $ select newTodoSelector >>= setVal ""
 
-domUpdate (AllToggle b) =
-  void $ select (todoItemsSelector "") >>= setDoneSelection b
-domUpdate (NewEnter t) = do
-  f <- filterFromLocation
-  domAppendHide t (f == "completed")
-  newClear
-domUpdate NewAbandon = newClear
-domUpdate (Toggle b n) = do
-  x <- select $ todoIdSelector n
-  setDoneSelection b x
-  h <- T.pack . fromJSString <$> windowLocationHash
-  let f = if T.null h then "all" else T.drop 1 h
-  when (b && f == "active") $ void $ addClass "hidden" x
-  when (not b && f == "completed") $ void $ addClass "hidden" x
-domUpdate (Edit n) = do
-  x <- select (todoIdSelector n)
-  t <- J.find "label" x >>= getText
-  void $ replaceWith (editItem n t) x
-domUpdate (Enter t n) = do
-  x <- select (todoIdSelector n)
-  -- XXX grab the Done status from existing
-  void $ replaceWith (todoItem $ Todo n t False) x
-domUpdate (Delete n) = domIndexDelete n
-domUpdate (Filter f) = do
-  setFilter f
-  case f of
-    "active" -> hide done >> reveal notDone
-    "completed" -> hide notDone >> reveal done
-    _ -> reveal all
-  where
-    done = todoItemsSelector ".completed"
-    notDone = todoItemsSelector ":not(.completed)"
-    all = todoItemsSelector ""
-domUpdate DoneClear = void $ select (todoItemsSelector ".completed") >>= detach
-
 bindings ts = do
   setSpan "bind-n-left" $ tshow todosLeft
   setSpan "bind-phrase-left" todosLeftPhrase
@@ -228,7 +195,6 @@ bindings ts = do
   hideIf (todos == 0) footerSelector
   hideIf (todosDone == 0) buttonClearSelector
   hideIf (todos == 0) toggleAllSelector
-  clearDoneButton ts
   where
     setSpan x y = void $ select ("#" ++ x) >>= setText y
     todos = L.length ts
@@ -307,20 +273,6 @@ updateTodo ts = do
   putStrLn $ "in updateTodo: " ++ tshow ts
   return ()
 
-setToggleAll :: [Todo] -> IO ()
-setToggleAll ts = void $ select "input#toggle-all" >>=
-                      if allDone then setProp "checked" "true"
-                        else removeProp "checked"
-  where allDone = not (L.null ts) && L.null (L.filter (not . todoDone) ts)
-
-footer :: [Todo] -> IO ()
-footer ts = hideIf noTodos footerSelector
-  where noTodos = L.null ts
-
-clearDoneButton :: [Todo] -> IO ()
-clearDoneButton ts = hideIf noneDone buttonClearSelector
-  where noneDone = L.null $ L.filter todoDone ts
-
 reveal :: Text -> IO ()
 reveal t = select t >>= jReveal
 
@@ -391,6 +343,13 @@ extCreate ref v = atomicModifyIORef ref create
       let m = fromMaybe 0 (maximumMay $ map todoId ts)
           newt = Todo (m+1) v False
       in (newt : ts, newt)
+
+-- see comment above: it's not easy to feed 
+extSetDone ref i d = atomicModifyIORef ref set
+  where
+    set ts = case find ((i ==) . todoId) ts of
+               Just j -> j { todoDone = d } : L.delete j ts
+               Nothing -> ts
 
 -- given a filter, a previous state of the "done" flag, the current state
 -- of the flag, and a selection, hide or reveal the selection as necessary
