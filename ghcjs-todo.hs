@@ -20,6 +20,15 @@ import Reactive.Banana.Frameworks
 import Text.Blaze.Html.Renderer.Text (renderHtml)
 import Text.Hamlet (shamlet)
 
+import Data.Aeson
+import Data.Aeson.Types (parseMaybe)
+import qualified Data.ByteString.Lazy as LBS
+import qualified Data.Text.Encoding as DTE
+import GHCJS.Marshal (toJSRef)
+import GHCJS.Prim (fromJSString, toJSString)
+import GHCJS.Types (JSString)
+
+
 foreign import javascript unsafe "$r = window.location.hash;"
   windowLocationHash :: IO JSString
 foreign import javascript safe   "window.location.hash = $1;"
@@ -27,15 +36,15 @@ foreign import javascript safe   "window.location.hash = $1;"
 
 main :: IO ()
 main = do
-  todoRef <- extInit
-  todos <- extFetch todoRef
+  -- todoRef <- extInit
+  todos <- extFetch -- todoRef
   bindings todos
   mapM_ domAppend todos
   f <- filterFromLocation
   newFilter (Filter f)
   (addHandler, fire) <- newAddHandler
   compile (makeNetworkDescription todos f addHandler) >>= actuate
-  initJEvents fire todoRef
+  initJEvents fire ()
 
 filters :: [Text]
 filters = ["all", "active", "completed"]
@@ -107,7 +116,9 @@ update (TEvent ts _ (Enter t i)) = do
     Just j -> void $ replaceWith (todoItem $ j { todoText = t }) x
     Nothing -> return ()
 
-update (TEvent ts _ (Delete n)) = domIndexDelete n
+update (TEvent ts _ (Delete n)) = do
+  extDelete n
+  domIndexDelete n
 
 update (TEvent ts oldf (Filter newf)) = do
   setFilter newf
@@ -167,8 +178,8 @@ newKeyUp todoRef fire e = do
   when (k == keyEnter) $ do
     v <- target e >>= selectElement >>= getVal
     when (not $ T.null v) $ do
-      t <- extCreate todoRef v
-      fire $ NewEnter t
+      t <- extCreate v
+      fire $ NewEnter (Todo 7 "New one" False) -- t
   when (k == keyEscape) $ fire NewAbandon
 
 clearDone fire _ = fire DoneClear
@@ -327,6 +338,12 @@ data Todo = Todo { todoId :: TodoId
 instance Ord Todo
   where compare = compare `on` todoId
 
+instance FromJSON Todo where
+  parseJSON (Object v) = 
+    Todo <$> v .: "id" <*> v .: "title" <*> v .: "isCompleted"
+  parseJSON _ = mzero
+
+{-
 extInit = newIORef $ sort initialTodos
   where
     initialTodos =
@@ -334,7 +351,73 @@ extInit = newIORef $ sort initialTodos
       , Todo 14 "???" False
       , Todo 16 "Profit!" False
       ]
+      -}
 
+extFetch :: IO [Todo]
+extFetch = do
+  x <- ajax "/todos" () def
+  let y = arData x
+  print y
+  let r = case y of
+            Object o -> do
+              a <- lookup "todos" o
+              b <- parseMaybe parseJSON a :: Maybe [Todo]
+              return b
+            _ -> Nothing
+  case r of
+    Nothing -> return []
+    Just q -> return q
+
+extDelete n = do
+  putStrLn $ "extDelete " ++ tshow n
+  r <- J.ajax ("/todos/" ++ tshow n) () def { asMethod = DELETE }
+  print r
+
+{-
+  -- XXX use safeUtf8
+  -- XXX use ClassyPrelude
+  let mb = fmap DTE.encodeUtf8 $ arData x
+  case mb of
+    Nothing -> return []
+    Just b -> do
+      let mmp = decode $ LBS.fromStrict b :: Maybe Object
+      print mmp
+      case mmp of
+        Nothing -> return []
+        Just mp -> do
+          let mjts = lookup "todos" mp
+          print mjts
+          case mjts of
+            Nothing -> return []
+            Just jts -> do
+              let mts = parseMaybe parseJSON jts :: Maybe [Todo]
+              case mts of
+                Nothing -> return []
+                Just ts -> return ts
+-}
+
+-- sortof working, but we want to get back from the server the Todo with the id
+-- filled in. problem is that Javascript.JQuery isn't complete. in particular,
+-- i think this (in JavaScript/JQuery/Internal.hs) is throwing away my data:
+--                                if(typeof(d) === 'string') {\
+--                                  $c({ data: d, status: xhr.status });\
+--                                 } else {\
+--                                  $c({ data: null, status: d.status });\
+--                                }\
+
+extCreate t = do
+  let t1 = DTE.decodeUtf8 $ LBS.toStrict $ encode t
+  let o1 = object [ "data" .= t1, "contentType" .= ("text/json; charset=UTF-8" :: Text), "type" .= ("POST" :: Text) ]
+  r <- J.ajax "/todos" o1 def
+  print r
+  case arStatus r of
+    0 -> return $ Just t
+    _ -> errorPopup >> return Nothing
+
+errorPopup = do
+  putStrLn $ "ERROR!"
+
+{-
 extFetch todoRef = readIORef todoRef
 
 extCreate ref v = atomicModifyIORef ref create
@@ -343,13 +426,16 @@ extCreate ref v = atomicModifyIORef ref create
       let m = fromMaybe 0 (maximumMay $ map todoId ts)
           newt = Todo (m+1) v False
       in (newt : ts, newt)
+-}
 
 -- see comment above: it's not easy to feed 
+{-
 extSetDone ref i d = atomicModifyIORef ref set
   where
     set ts = case find ((i ==) . todoId) ts of
                Just j -> j { todoDone = d } : L.delete j ts
                Nothing -> ts
+               -}
 
 -- given a filter, a previous state of the "done" flag, the current state
 -- of the flag, and a selection, hide or reveal the selection as necessary
