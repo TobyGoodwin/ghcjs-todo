@@ -179,7 +179,10 @@ newKeyUp todoRef fire e = do
     v <- target e >>= selectElement >>= getVal
     when (not $ T.null v) $ do
       t <- extCreate v
-      fire $ NewEnter (Todo 7 "New one" False) -- t
+      print t
+      case t of
+        Left e -> return ()
+        Right x -> fire $ NewEnter x
   when (k == keyEscape) $ fire NewAbandon
 
 clearDone fire _ = fire DoneClear
@@ -340,7 +343,9 @@ instance Ord Todo
 
 instance FromJSON Todo where
   parseJSON (Object v) = 
-    Todo <$> v .: "id" <*> v .: "title" <*> v .: "isCompleted"
+    let simple x = Todo <$> x .: "id" <*> x .: "title" <*> x .: "isCompleted"
+        wrapped x = x .: "todo" >>= simple
+    in simple v <|> wrapped v
   parseJSON _ = mzero
 
 {-
@@ -405,6 +410,7 @@ extDelete n = do
 --                                  $c({ data: null, status: d.status });\
 --                                }\
 
+{-
 extCreate t = do
   let t1 = DTE.decodeUtf8 $ LBS.toStrict $ encode t
   let o1 = object [ "data" .= t1, "contentType" .= ("text/json; charset=UTF-8" :: Text), "type" .= ("POST" :: Text) ]
@@ -413,6 +419,24 @@ extCreate t = do
   case arStatus r of
     0 -> return $ Just t
     _ -> errorPopup >> return Nothing
+-}
+
+extCreate :: Text -> IO (Either Text Todo)
+extCreate t = do
+  r <- J.ajax "/todos" obj def
+  print r
+  case arStatus r of
+    200 -> do
+      case parseMaybe parseJSON $ arData r of
+        Just s -> return $ Right s
+        Nothing -> return $ Left "cannot decode response"
+    _ -> do
+      errorPopup
+      return $ Left "something went wrong"
+  where
+    obj = object [ "title" .= t
+                 , "isCompleted" .= False
+                 ]
 
 errorPopup = do
   putStrLn $ "ERROR!"
