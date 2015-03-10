@@ -14,7 +14,7 @@ import qualified Data.Text.Lazy as LT
 import GHCJS.Prim (fromJSString, toJSString)
 import GHCJS.Types (JSString)
 import JavaScript.JQuery hiding (Event, filter, find, last, not, on)
-import qualified JavaScript.JQuery as J
+import qualified JavaScript.JQuery as JQ
 import Reactive.Banana as RB
 import Reactive.Banana.Frameworks
 import Text.Blaze.Html.Renderer.Text (renderHtml)
@@ -67,9 +67,9 @@ initJEvents fire todoRef = do
   mapM filterOn filters
   newClear
   where
-    plainOn fn ev x = void $ select x >>= J.on (fn fire) ev def
+    plainOn fn ev x = void $ select x >>= JQ.on (fn fire) ev def
     descOn fn ev x desc =
-      J.on (fn fire) ev def { hsDescendantFilter = Just desc } x
+      JQ.on (fn fire) ev def { hsDescendantFilter = Just desc } x
     filterOn f = plainOn (filterClick f) "click" (filterSelector f)
 
 -- the banana network
@@ -94,6 +94,7 @@ makeNetworkDescription initTodos initFilter h = do
 update (TEvent ts f (AllToggle b)) = do
   let us = filter ((b /= ) . todoDone) ts
   mapM_ (toggle f b . todoId) us
+  mapM_ (\t -> extUpdate t { todoDone = b }) us
 
 update (TEvent _ f (NewEnter t)) = do
   domAppendHide t (f == "completed")
@@ -101,19 +102,28 @@ update (TEvent _ f (NewEnter t)) = do
 
 update (TEvent _ _ NewAbandon) = newClear
 
-update (TEvent ts f (Toggle b n)) = toggle f b n
+update (TEvent ts f (Toggle b n)) =
+  case find ((n ==) . todoId) ts of
+    Just t -> do
+      extUpdate t { todoDone = b }
+      toggle f b n
+    Nothing -> return ()
 
 update (TEvent ts _ (Edit i)) =
   case find ((i ==) . todoId) ts of
     Just j -> do
       x <- select (todoIdSelector i)
       void $ replaceWith (editItem i (todoText j)) x
+      extUpdate j
     Nothing -> return ()
 
 update (TEvent ts _ (Enter t i)) = do
   x <- select (todoIdSelector i)
   case find ((i ==) . todoId) ts of
-    Just j -> void $ replaceWith (todoItem $ j { todoText = t }) x
+    Just j -> do
+      let n = j { todoText = t }
+      extUpdate n
+      void $ replaceWith (todoItem $ j { todoText = t }) x
     Nothing -> return ()
 
 update (TEvent ts _ (Delete n)) = do
@@ -131,18 +141,13 @@ update (TEvent ts oldf (Filter newf)) = do
     notDone = todoItemsSelector ":not(.completed)"
     all = todoItemsSelector ""
 
-update (TEvent ts _ DoneClear) =
+update (TEvent ts _ DoneClear) = do
   void $ select (todoItemsSelector ".completed") >>= detach
+  mapM_ (extDelete . todoId) $ filter todoDone ts
 
 toggle f b n = do
   x <- select $ todoIdSelector n
   setDoneSelection b x
-  -- this won't actually work for the IORef external model, because we don't
-  -- have the IORef at this point! it could be passed all the way down through
-  -- the reactive network, I guess, or possibly I could use Reader. or I could
-  -- just ignore the problem: the IORef external model got my head in order, i
-  -- don't actually have to make it work
-  -- extSetDone n b
   hideOrReveal f (not b) b x
 
 -- reactive events
@@ -254,10 +259,11 @@ editItem i t =
 
 setDoneSelection b x = do
   if b then void $ addClass "completed" x >>=
-                    J.find "input.toggle" >>= setProp "checked" "true"
+                    JQ.find "input.toggle" >>= setProp "checked" "true"
        else void $ removeClass "completed" x >>= 
-               J.find "input.toggle" >>= removeProp "checked"
+               JQ.find "input.toggle" >>= removeProp "checked"
 
+-- justTodoFns maintains the internal model
 justTodoFns :: REvent -> Maybe ([Todo] -> [Todo])
 justTodoFns (Toggle b n) = Just $ todoIndexHelper set n
   where 
@@ -281,11 +287,6 @@ todoIndexHelper f n ts =
   case find ((n ==) . todoId) ts of
     Nothing -> ts
     Just x -> f x ts
-
-updateTodo :: [Todo] -> IO ()
-updateTodo ts = do
-  putStrLn $ "in updateTodo: " ++ tshow ts
-  return ()
 
 reveal :: Text -> IO ()
 reveal t = select t >>= jReveal
@@ -330,7 +331,7 @@ domAppendHide :: Todo -> Bool -> IO ()
 domAppendHide item hide = do
   x <- select $ todoItem item
   t <- select todoListSelector >>= appendJQuery x
-  when hide $ void $ J.find "li:last" t >>= addClass "hidden"
+  when hide $ void $ JQ.find "li:last" t >>= addClass "hidden"
 
 type TodoId = Int
 data Todo = Todo { todoId :: TodoId
@@ -340,6 +341,12 @@ data Todo = Todo { todoId :: TodoId
 
 instance Ord Todo
   where compare = compare `on` todoId
+
+instance ToJSON Todo where
+  toJSON (Todo i t d) = object [ "id" .= i
+                               , "title" .= t
+                               , "isCompleted" .= d
+                               ]
 
 instance FromJSON Todo where
   parseJSON (Object v) = 
@@ -373,10 +380,17 @@ extFetch = do
     Nothing -> return []
     Just q -> return q
 
+extUpdate :: Todo -> IO ()
+extUpdate t = do
+  putStr $ "extUpdate " ++ tshow t
+  r <- ajax ("/todos/" ++ tshow (todoId t)) (toJSON t) def { asMethod = PUT }
+  putStr $ tshow r
+  return ()
+
 extDelete n = do
-  putStrLn $ "extDelete " ++ tshow n
-  r <- J.ajax ("/todos/" ++ tshow n) () def { asMethod = DELETE }
-  print r
+  putStr $ "extDelete " ++ tshow n
+  r <- ajax ("/todos/" ++ tshow n) () def { asMethod = DELETE }
+  putStr $ tshow r
 
 {-
   -- XXX use safeUtf8
@@ -423,7 +437,7 @@ extCreate t = do
 
 extCreate :: Text -> IO (Either Text Todo)
 extCreate t = do
-  r <- J.ajax "/todos" obj def
+  r <- ajax "/todos" obj def
   print r
   case arStatus r of
     200 -> do
